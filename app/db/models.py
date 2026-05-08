@@ -1,0 +1,194 @@
+from __future__ import annotations
+
+import enum
+from datetime import datetime
+from typing import Any
+
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class RoleEnum(str, enum.Enum):
+    user = "user"
+    admin = "admin"
+
+
+class VisibilityEnum(str, enum.Enum):
+    global_ = "global"
+    user = "user"
+
+
+class DocumentStatusEnum(str, enum.Enum):
+    uploaded = "uploaded"
+    processing = "processing"
+    ready = "ready"
+    error = "error"
+
+
+def enum_values(enum_class: type[enum.Enum]) -> list[str]:
+    return [item.value for item in enum_class]
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    first_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    full_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    role: Mapped[RoleEnum] = mapped_column(
+        Enum(RoleEnum, name="role_enum", values_callable=enum_values),
+        default=RoleEnum.user,
+    )
+    department: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    project_context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    messages: Mapped[list["Message"]] = relationship(back_populates="user")
+    user_files: Mapped[list["UserFile"]] = relationship(back_populates="user")
+
+
+class Document(Base):
+    __tablename__ = "documents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(500))
+    original_filename: Mapped[str] = mapped_column(String(500))
+    stored_path: Mapped[str] = mapped_column(String(1000))
+    file_type: Mapped[str] = mapped_column(String(20))
+    visibility: Mapped[VisibilityEnum] = mapped_column(
+        Enum(VisibilityEnum, name="visibility_enum", values_callable=enum_values)
+    )
+    owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    module_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    module_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    material_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    status: Mapped[DocumentStatusEnum] = mapped_column(
+        Enum(DocumentStatusEnum, name="document_status_enum", values_callable=enum_values),
+        default=DocumentStatusEnum.uploaded,
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    chunks: Mapped[list["Chunk"]] = relationship(back_populates="document", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_documents_visibility_owner", "visibility", "owner_user_id"),
+        Index("ix_documents_module_number", "module_number"),
+    )
+
+
+class Chunk(Base):
+    __tablename__ = "chunks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    chunk_text: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(Vector(1536))
+    chunk_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata",
+        JSONB().with_variant(JSON, "sqlite"),
+        default=dict,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    document: Mapped["Document"] = relationship(back_populates="chunks")
+
+    __table_args__ = (
+        UniqueConstraint("document_id", "chunk_index", name="uq_chunks_document_chunk_index"),
+        Index("ix_chunks_document_chunk_index", "document_id", "chunk_index"),
+    )
+
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    mode: Mapped[str] = mapped_column(String(100), default="general")
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str] = mapped_column(Text)
+    sources: Mapped[list[dict[str, Any]]] = mapped_column(JSONB().with_variant(JSON, "sqlite"), default=list)
+    token_usage: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB().with_variant(JSON, "sqlite"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped["User"] = relationship(back_populates="messages")
+
+    __table_args__ = (Index("ix_messages_user_created_at", "user_id", "created_at"),)
+
+
+class MessageFeedback(Base):
+    __tablename__ = "message_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    value: Mapped[str] = mapped_column(String(20))
+    reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("message_id", "user_id", name="uq_message_feedback_message_user"),)
+
+
+class BotText(Base):
+    __tablename__ = "bot_texts"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+    updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class UserFile(Base):
+    __tablename__ = "user_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    telegram_file_id: Mapped[str] = mapped_column(String(512), index=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
+    original_filename: Mapped[str] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped["User"] = relationship(back_populates="user_files")
+
+
+class ErrorLog(Base):
+    __tablename__ = "errors"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    context: Mapped[str] = mapped_column(String(255))
+    error_text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
