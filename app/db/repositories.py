@@ -414,3 +414,116 @@ class StatsRepository:
             "chunks": chunks_count,
             "messages": messages_count,
         }
+
+    @staticmethod
+    async def dashboard(session: AsyncSession) -> dict[str, int]:
+        totals = await StatsRepository.totals(session)
+        user_files_count = int((await session.execute(select(func.count(UserFile.id)))).scalar() or 0)
+        errors_count = int((await session.execute(select(func.count(ErrorLog.id)))).scalar() or 0)
+        users_with_project_context = int(
+            (
+                await session.execute(
+                    select(func.count(User.id)).where(
+                        and_(User.project_context.is_not(None), func.length(User.project_context) > 0)
+                    )
+                )
+            ).scalar()
+            or 0
+        )
+        global_documents = int(
+            (
+                await session.execute(select(func.count(Document.id)).where(Document.visibility == VisibilityEnum.global_))
+            ).scalar()
+            or 0
+        )
+        user_documents = int(
+            (await session.execute(select(func.count(Document.id)).where(Document.visibility == VisibilityEnum.user))).scalar()
+            or 0
+        )
+        ready_documents = int(
+            (await session.execute(select(func.count(Document.id)).where(Document.status == DocumentStatusEnum.ready))).scalar()
+            or 0
+        )
+        processing_documents = int(
+            (
+                await session.execute(
+                    select(func.count(Document.id)).where(
+                        Document.status.in_([DocumentStatusEnum.uploaded, DocumentStatusEnum.processing])
+                    )
+                )
+            ).scalar()
+            or 0
+        )
+        error_documents = int(
+            (await session.execute(select(func.count(Document.id)).where(Document.status == DocumentStatusEnum.error))).scalar()
+            or 0
+        )
+        now = datetime.now(timezone.utc)
+        messages_today = await StatsRepository.count_messages_since(session, now - timedelta(days=1))
+        messages_week = await StatsRepository.count_messages_since(session, now - timedelta(days=7))
+        messages_month = await StatsRepository.count_messages_since(session, now - timedelta(days=30))
+        return {
+            **totals,
+            "user_files": user_files_count,
+            "errors": errors_count,
+            "users_with_project_context": users_with_project_context,
+            "global_documents": global_documents,
+            "user_documents": user_documents,
+            "ready_documents": ready_documents,
+            "processing_documents": processing_documents,
+            "error_documents": error_documents,
+            "messages_today": messages_today,
+            "messages_week": messages_week,
+            "messages_month": messages_month,
+        }
+
+    @staticmethod
+    async def count_messages_since(session: AsyncSession, since: datetime) -> int:
+        result = await session.execute(select(func.count(Message.id)).where(Message.created_at >= since))
+        return int(result.scalar() or 0)
+
+    @staticmethod
+    async def token_usage_since(session: AsyncSession, since: datetime) -> dict[str, int]:
+        result = await session.execute(select(Message.token_usage).where(Message.created_at >= since))
+        usage_rows = [row[0] for row in result.all() if isinstance(row[0], dict)]
+        prompt_tokens = 0
+        completion_tokens = 0
+        total_tokens = 0
+        for usage in usage_rows:
+            prompt_tokens += _usage_int(
+                usage,
+                "prompt_tokens",
+                "input_tokens",
+                "input_text_tokens",
+                "prompt_token_count",
+            )
+            completion_tokens += _usage_int(
+                usage,
+                "completion_tokens",
+                "output_tokens",
+                "completion_token_count",
+            )
+            total_tokens += _usage_int(usage, "total_tokens", "total_token_count")
+        if total_tokens == 0:
+            total_tokens = prompt_tokens + completion_tokens
+        return {
+            "requests": len(usage_rows),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+
+    @staticmethod
+    async def estimated_embedding_tokens(session: AsyncSession) -> int:
+        # A cheap MVP estimate: 1 token is roughly 4 text characters for Russian/English mixed docs.
+        result = await session.execute(select(func.coalesce(func.sum(func.length(Chunk.chunk_text)), 0)))
+        total_chars = int(result.scalar() or 0)
+        return max(total_chars // 4, 0)
+
+
+def _usage_int(usage: dict[str, Any], *keys: str) -> int:
+    for key in keys:
+        value = usage.get(key)
+        if isinstance(value, int | float):
+            return int(value)
+    return 0

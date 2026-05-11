@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     temperature: float = Field(default=0.2, alias="TEMPERATURE")
     embedding_dimensions: int = Field(default=1536, alias="EMBEDDING_DIMENSIONS")
 
+    vm_rub_per_hour: float = Field(default=4.60, alias="VM_RUB_PER_HOUR")
+    vm_billing_started_at: str | None = Field(default=None, alias="VM_BILLING_STARTED_AT")
+    usd_rub_rate: float = Field(default=90.0, alias="USD_RUB_RATE")
+    openai_chat_input_usd_per_1m: float = Field(default=0.15, alias="OPENAI_CHAT_INPUT_USD_PER_1M")
+    openai_chat_output_usd_per_1m: float = Field(default=0.60, alias="OPENAI_CHAT_OUTPUT_USD_PER_1M")
+    openai_embedding_usd_per_1m: float = Field(default=0.02, alias="OPENAI_EMBEDDING_USD_PER_1M")
+    yandexgpt_input_rub_per_1k: float = Field(default=0.20, alias="YANDEXGPT_INPUT_RUB_PER_1K")
+    yandexgpt_output_rub_per_1k: float = Field(default=0.20, alias="YANDEXGPT_OUTPUT_RUB_PER_1K")
+    yandex_embedding_rub_per_1k: float = Field(default=0.0101, alias="YANDEX_EMBEDDING_RUB_PER_1K")
+
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     @computed_field(return_type=list[int])

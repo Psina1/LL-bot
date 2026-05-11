@@ -51,6 +51,7 @@ ADMIN_MENU_BUTTONS = [
     [KeyboardButton(text="Админ: статус")],
     [KeyboardButton(text="Админ: загрузить материал"), KeyboardButton(text="Админ: материалы")],
     [KeyboardButton(text="Админ: тексты"), KeyboardButton(text="Админ: статистика")],
+    [KeyboardButton(text="Админ: расходы")],
     [KeyboardButton(text="Главное меню")],
 ]
 

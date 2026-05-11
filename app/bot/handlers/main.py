@@ -4,6 +4,8 @@ import logging
 import random
 import re
 import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from aiogram import F, Router
@@ -81,6 +83,48 @@ def _shorten_project_context(project_context: str, limit: int = 900) -> str:
     if len(cleaned) <= limit:
         return cleaned
     return f"{cleaned[:limit].rstrip()}..."
+
+
+def _format_rub(value: float | None) -> str:
+    if value is None:
+        return "нет данных"
+    if value < 0.01:
+        return "<0.01 ₽"
+    return f"{value:.2f} ₽"
+
+
+def _format_tokens(value: int) -> str:
+    return f"{value:,}".replace(",", " ")
+
+
+def _parse_billing_started_at(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _dir_size_mb(path: Path) -> float:
+    if not path.exists():
+        return 0.0
+    total_bytes = 0
+    for item in path.rglob("*"):
+        if item.is_file():
+            try:
+                total_bytes += item.stat().st_size
+            except OSError:
+                continue
+    return total_bytes / 1024 / 1024
 
 
 async def _delete_message_safely(message: Message | None) -> None:
@@ -519,11 +563,12 @@ def build_main_router(container: AppContainer) -> Router:
             return
 
         async with SessionLocal() as session:
-            totals = await StatsRepository.totals(session)
+            totals = await StatsRepository.dashboard(session)
             feedback_totals = await MessageFeedbackRepository.totals(session)
             feedback_reason_totals = await MessageFeedbackRepository.reason_totals(session)
             latest_errors = await ErrorRepository.latest(session, limit=5)
 
+        data_size_mb = _dir_size_mb(container.settings.data_dir)
         reason_labels = {
             "not_found": "не нашёл ответ",
             "too_general": "слишком общий",
@@ -531,11 +576,19 @@ def build_main_router(container: AppContainer) -> Router:
             "other": "другая причина",
         }
         lines = [
-            "Статистика:",
+            "Админ-сводка:",
             f"- Пользователей: {totals['users']}",
-            f"- Документов: {totals['documents']}",
+            f"- С проектным контекстом: {totals['users_with_project_context']}",
+            f"- Документов всего: {totals['documents']}",
+            f"- Общих материалов: {totals['global_documents']}",
+            f"- Личных файлов: {totals['user_documents']}",
+            f"- Пользовательских загрузок: {totals['user_files']}",
+            f"- Документов ready/error/processing: {totals['ready_documents']}/{totals['error_documents']}/{totals['processing_documents']}",
             f"- Чанков: {totals['chunks']}",
-            f"- Вопросов: {totals['messages']}",
+            f"- Вопросов всего: {totals['messages']}",
+            f"- Вопросов за 24ч/7д/30д: {totals['messages_today']}/{totals['messages_week']}/{totals['messages_month']}",
+            f"- Размер файлов в data: {data_size_mb:.1f} МБ",
+            f"- Ошибок в журнале: {totals['errors']}",
             f"- Ответы полезны: {feedback_totals.get('yes', 0)}",
             f"- Ответы не полезны: {feedback_totals.get('no', 0)}",
         ]
@@ -550,7 +603,84 @@ def build_main_router(container: AppContainer) -> Router:
                 lines.append(f"- [{error.created_at}] {error.context}: {error.error_text[:120]}")
         else:
             lines.append("- Ошибок нет")
-        await message.answer("\n".join(lines))
+        await message.answer("\n".join(lines), reply_markup=admin_menu_keyboard())
+
+    @router.message(F.text == "Админ: расходы")
+    async def admin_costs_handler(message: Message) -> None:
+        if not await require_admin(message):
+            return
+
+        now = datetime.now(timezone.utc)
+        async with SessionLocal() as session:
+            usage_today = await StatsRepository.token_usage_since(session, now - timedelta(days=1))
+            usage_week = await StatsRepository.token_usage_since(session, now - timedelta(days=7))
+            usage_month = await StatsRepository.token_usage_since(session, now - timedelta(days=30))
+            embedding_tokens_total = await StatsRepository.estimated_embedding_tokens(session)
+
+        settings = container.settings
+
+        def openai_chat_cost(usage: dict[str, int]) -> float:
+            input_cost_usd = usage["prompt_tokens"] / 1_000_000 * settings.openai_chat_input_usd_per_1m
+            output_cost_usd = usage["completion_tokens"] / 1_000_000 * settings.openai_chat_output_usd_per_1m
+            return (input_cost_usd + output_cost_usd) * settings.usd_rub_rate
+
+        def yandex_chat_cost(usage: dict[str, int]) -> float:
+            input_cost_rub = usage["prompt_tokens"] / 1_000 * settings.yandexgpt_input_rub_per_1k
+            output_cost_rub = usage["completion_tokens"] / 1_000 * settings.yandexgpt_output_rub_per_1k
+            return input_cost_rub + output_cost_rub
+
+        openai_embedding_rub = (
+            embedding_tokens_total / 1_000_000 * settings.openai_embedding_usd_per_1m * settings.usd_rub_rate
+        )
+        yandex_embedding_rub = embedding_tokens_total / 1_000 * settings.yandex_embedding_rub_per_1k
+
+        billing_started_at = _parse_billing_started_at(settings.vm_billing_started_at)
+        vm_spent_line = "- VM потрачено с запуска: нет данных"
+        if billing_started_at is not None:
+            elapsed_hours = max((now - billing_started_at).total_seconds() / 3600, 0)
+            vm_spent_line = f"- VM потрачено с {billing_started_at.date()}: {_format_rub(elapsed_hours * settings.vm_rub_per_hour)}"
+
+        lines = [
+            "Расходы и оценки:",
+            "",
+            "Инфраструктура:",
+            f"- VM/сервер: {_format_rub(settings.vm_rub_per_hour)} в час",
+            f"- VM если 24/7: {_format_rub(settings.vm_rub_per_hour * 24)} в день",
+            f"- VM если 24/7: {_format_rub(settings.vm_rub_per_hour * 24 * 30)} в месяц",
+            vm_spent_line,
+            "",
+            "LLM токены, сохранённые в БД:",
+            (
+                f"- 24ч: запросов={usage_today['requests']}, input={_format_tokens(usage_today['prompt_tokens'])}, "
+                f"output={_format_tokens(usage_today['completion_tokens'])}, total={_format_tokens(usage_today['total_tokens'])}"
+            ),
+            (
+                f"- 7д: запросов={usage_week['requests']}, input={_format_tokens(usage_week['prompt_tokens'])}, "
+                f"output={_format_tokens(usage_week['completion_tokens'])}, total={_format_tokens(usage_week['total_tokens'])}"
+            ),
+            (
+                f"- 30д: запросов={usage_month['requests']}, input={_format_tokens(usage_month['prompt_tokens'])}, "
+                f"output={_format_tokens(usage_month['completion_tokens'])}, total={_format_tokens(usage_month['total_tokens'])}"
+            ),
+            "",
+            "Оценка OpenAI в рублях:",
+            f"- 24ч: {_format_rub(openai_chat_cost(usage_today))}",
+            f"- 7д: {_format_rub(openai_chat_cost(usage_week))}",
+            f"- 30д: {_format_rub(openai_chat_cost(usage_month))}",
+            f"- embeddings за все загруженные чанки: ~{_format_tokens(embedding_tokens_total)} токенов, {_format_rub(openai_embedding_rub)}",
+            "",
+            "Оценка YandexGPT Lite в рублях:",
+            f"- 24ч: {_format_rub(yandex_chat_cost(usage_today))}",
+            f"- 7д: {_format_rub(yandex_chat_cost(usage_week))}",
+            f"- 30д: {_format_rub(yandex_chat_cost(usage_month))}",
+            f"- embeddings за все загруженные чанки: ~{_format_tokens(embedding_tokens_total)} токенов, {_format_rub(yandex_embedding_rub)}",
+            "",
+            "Важно:",
+            "- Это оценка по успешным ответам, сохранённым в БД.",
+            "- Точный счёт за VM смотри в Yandex Billing.",
+            "- Точный счёт OpenAI/YandexGPT смотри в кабинете провайдера.",
+        ]
+        await message.answer("\n".join(lines), reply_markup=admin_menu_keyboard())
 
     @router.message(F.text == "Админ: статус")
     async def admin_status_handler(message: Message) -> None:
