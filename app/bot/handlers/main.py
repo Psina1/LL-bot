@@ -89,7 +89,7 @@ def _format_rub(value: float | None) -> str:
     if value is None:
         return "нет данных"
     if value < 0.01:
-        return "<0.01 ₽"
+        return "меньше 0.01 ₽"
     return f"{value:.2f} ₽"
 
 
@@ -603,7 +603,7 @@ def build_main_router(container: AppContainer) -> Router:
                 lines.append(f"- [{error.created_at}] {error.context}: {error.error_text[:120]}")
         else:
             lines.append("- Ошибок нет")
-        await message.answer("\n".join(lines), reply_markup=admin_menu_keyboard())
+        await message.answer("\n".join(lines), reply_markup=admin_menu_keyboard(), parse_mode=None)
 
     @router.message(F.text == "Админ: расходы")
     async def admin_costs_handler(message: Message) -> None:
@@ -680,14 +680,14 @@ def build_main_router(container: AppContainer) -> Router:
             "- Точный счёт за VM смотри в Yandex Billing.",
             "- Точный счёт OpenAI/YandexGPT смотри в кабинете провайдера.",
         ]
-        await message.answer("\n".join(lines), reply_markup=admin_menu_keyboard())
+        await message.answer("\n".join(lines), reply_markup=admin_menu_keyboard(), parse_mode=None)
 
     @router.message(F.text == "Админ: статус")
     async def admin_status_handler(message: Message) -> None:
         if not await require_admin(message):
             return
         await message.answer("Проверяю БД, LLM и RAG...")
-        await message.answer(await build_admin_status_report(), reply_markup=admin_menu_keyboard())
+        await message.answer(await build_admin_status_report(), reply_markup=admin_menu_keyboard(), parse_mode=None)
 
     @router.message(F.text == "Админ: тексты")
     async def admin_texts_handler(message: Message) -> None:
