@@ -30,6 +30,7 @@ from app.bot.keyboards.reply import (
     materials_type_keyboard,
     project_context_keyboard,
     project_help_keyboard,
+    video_library_keyboard,
 )
 from app.bot.states.forms import AdminFlow, UserFlow
 from app.bot.texts import (
@@ -46,6 +47,7 @@ from app.bot.texts import (
     PROJECT_HELP_MENU_PROMPT,
     PROJECT_HELP_PLACEHOLDER_TEXT,
     PROJECT_PROMPT,
+    VIDEO_LIBRARY_DISABLED_TEXT,
 )
 from app.db.repositories import (
     BotTextRepository,
@@ -139,6 +141,12 @@ async def _delete_message_safely(message: Message | None) -> None:
 def build_main_router(container: AppContainer) -> Router:
     router = Router(name="main")
 
+    def user_main_menu():
+        return main_menu_keyboard(show_project_context=container.settings.show_project_context_menu)
+
+    def materials_menu_keyboard():
+        return materials_type_keyboard(video_enabled=container.settings.video_library_enabled)
+
     async def ensure_user(message: Message):
         async with SessionLocal() as session:
             return await UserRepository.upsert_telegram_user(
@@ -203,7 +211,7 @@ def build_main_router(container: AppContainer) -> Router:
                 force_rag=True,
             )
             await message.answer(result.text, reply_markup=feedback_keyboard(result.message_id))
-            await message.answer("Если хочешь продолжить, выбери действие:", reply_markup=main_menu_keyboard())
+            await message.answer("Если хочешь продолжить, выбери действие:", reply_markup=user_main_menu())
             await state.update_data(last_question=question, last_answer=result.text)
         except Exception as exc:
             logger.exception("answer_question_failed")
@@ -228,7 +236,7 @@ def build_main_router(container: AppContainer) -> Router:
             lines = ["Доступные модули:"]
             for number, title, count in modules:
                 lines.append(f"- Модуль {number}: {title or 'Без названия'} ({count} материалов)")
-            await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
+            await message.answer("\n".join(lines), reply_markup=user_main_menu())
             return
 
         if not docs:
@@ -236,7 +244,7 @@ def build_main_router(container: AppContainer) -> Router:
                 "Материалы программы пока не загружены.\n\n"
                 "Как только администратор добавит файлы занятий, я смогу показывать их здесь "
                 "и отвечать по ним с источниками.",
-                reply_markup=main_menu_keyboard(),
+                reply_markup=user_main_menu(),
             )
             return
 
@@ -244,7 +252,7 @@ def build_main_router(container: AppContainer) -> Router:
         for doc in docs[:20]:
             status_hint = "готов" if doc.status.value == "ready" else "обрабатывается"
             lines.append(f"- {doc.title} ({status_hint})")
-        await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
+        await message.answer("\n".join(lines), reply_markup=user_main_menu())
 
     async def send_homework_list(message: Message) -> None:
         async with SessionLocal() as session:
@@ -254,14 +262,14 @@ def build_main_router(container: AppContainer) -> Router:
                 "Домашние задания пока не найдены в загруженных материалах.\n\n"
                 "Когда администратор загрузит файл с домашками или пометит материал как `homework`, "
                 "я покажу список заданий здесь.",
-                reply_markup=main_menu_keyboard(),
+                reply_markup=user_main_menu(),
             )
             return
 
         lines = ["Нашёл материалы по домашним заданиям:"]
         for doc in docs:
             lines.append(f"- {doc.title}")
-        await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
+        await message.answer("\n".join(lines), reply_markup=user_main_menu())
 
     async def build_admin_status_report() -> str:
         lines = ["Статус бота:"]
@@ -378,7 +386,7 @@ def build_main_router(container: AppContainer) -> Router:
         await callback.answer("Спасибо, сохранил оценку.")
         if callback.message:
             if value == "yes":
-                await callback.message.answer("Спасибо! Рад, что ответ был полезен.", reply_markup=main_menu_keyboard())
+                await callback.message.answer("Спасибо! Рад, что ответ был полезен.", reply_markup=user_main_menu())
             else:
                 await callback.message.answer(
                     "Спасибо, это поможет улучшить ответы. Что именно было не так?",
@@ -423,25 +431,25 @@ def build_main_router(container: AppContainer) -> Router:
         if callback.message:
             await callback.message.answer(
                 "Принял. Можно переформулировать вопрос или уточнить материал, а я попробую ответить точнее.",
-                reply_markup=main_menu_keyboard(),
+                reply_markup=user_main_menu(),
             )
 
     @router.message(CommandStart())
     async def start_handler(message: Message, state: FSMContext) -> None:
         await ensure_user(message)
         await state.clear()
-        await message.answer(await get_bot_text("welcome"), reply_markup=main_menu_keyboard(), parse_mode=None)
+        await message.answer(await get_bot_text("welcome"), reply_markup=user_main_menu(), parse_mode=None)
 
     @router.message(Command("help"))
     async def help_handler(message: Message) -> None:
         await ensure_user(message)
-        await message.answer(await get_bot_text("help"), reply_markup=main_menu_keyboard(), parse_mode=None)
+        await message.answer(await get_bot_text("help"), reply_markup=user_main_menu(), parse_mode=None)
 
     @router.message(Command("cancel"))
     async def cancel_handler(message: Message, state: FSMContext) -> None:
         await ensure_user(message)
         await state.clear()
-        await message.answer("Действие отменено. Вернул в главное меню.", reply_markup=main_menu_keyboard())
+        await message.answer("Действие отменено. Вернул в главное меню.", reply_markup=user_main_menu())
 
     @router.message(Command("admin"))
     @router.message(F.text == "Админ: меню")
@@ -731,7 +739,7 @@ def build_main_router(container: AppContainer) -> Router:
             return
         if message.text in {"Админ: меню", "Главное меню"}:
             await state.clear()
-            reply_markup = admin_menu_keyboard() if message.text == "Админ: меню" else main_menu_keyboard()
+            reply_markup = admin_menu_keyboard() if message.text == "Админ: меню" else user_main_menu()
             await message.answer("Редактирование текста отменено.", reply_markup=reply_markup)
             return
         data = await state.get_data()
@@ -805,17 +813,17 @@ def build_main_router(container: AppContainer) -> Router:
     async def main_menu_handler(message: Message, state: FSMContext) -> None:
         await ensure_user(message)
         await state.clear()
-        await message.answer("Выбери действие:", reply_markup=main_menu_keyboard())
+        await message.answer("Выбери действие:", reply_markup=user_main_menu())
 
     @router.message(F.text == "Помощь")
     async def help_button_handler(message: Message) -> None:
         await ensure_user(message)
-        await message.answer(await get_bot_text("help"), reply_markup=main_menu_keyboard(), parse_mode=None)
+        await message.answer(await get_bot_text("help"), reply_markup=user_main_menu(), parse_mode=None)
 
     @router.message(F.text.in_(["Расписание Лиги Лидеров", "Расписание программы обучения"]))
     async def schedule_handler(message: Message) -> None:
         await ensure_user(message)
-        await message.answer(await get_bot_text("schedule"), reply_markup=main_menu_keyboard(), parse_mode=None)
+        await message.answer(await get_bot_text("schedule"), reply_markup=user_main_menu(), parse_mode=None)
 
     @router.message(F.text.in_(["Задать вопрос по организации Лиги Лидеров", "Задать вопрос по обучению"]))
     async def ask_training_question_handler(message: Message, state: FSMContext) -> None:
@@ -831,12 +839,34 @@ def build_main_router(container: AppContainer) -> Router:
     @router.message(F.text == "Сезон 1. Бизнес-консалтинг")
     async def materials_season_handler(message: Message) -> None:
         await ensure_user(message)
-        await message.answer(MATERIALS_TYPE_PROMPT, reply_markup=materials_type_keyboard())
+        await message.answer(MATERIALS_TYPE_PROMPT, reply_markup=materials_menu_keyboard())
 
     @router.message(F.text == "Записи и материалы занятий")
     async def materials_records_handler(message: Message) -> None:
         await ensure_user(message)
         await send_materials_list(message)
+
+    @router.message(F.text == "Видео занятий")
+    async def materials_video_handler(message: Message) -> None:
+        await ensure_user(message)
+        if not container.settings.video_library_enabled:
+            await message.answer(VIDEO_LIBRARY_DISABLED_TEXT, reply_markup=materials_menu_keyboard(), parse_mode=None)
+            return
+
+        video_url = (container.settings.video_library_url or "").strip()
+        if not video_url:
+            await message.answer(
+                "Видео-раздел включён, но ссылка на видеотеку ещё не настроена. Проверь VIDEO_LIBRARY_URL в .env.",
+                reply_markup=materials_menu_keyboard(),
+            )
+            return
+
+        await message.answer(
+            f"{container.settings.video_library_title}\n\n{container.settings.video_access_note}",
+            reply_markup=video_library_keyboard(video_url),
+            parse_mode=None,
+        )
+        await message.answer("После просмотра можно вернуться в главное меню.", reply_markup=user_main_menu())
 
     @router.message(F.text == "Подкасты на основе занятий")
     async def materials_podcasts_handler(message: Message, state: FSMContext) -> None:
@@ -941,7 +971,7 @@ def build_main_router(container: AppContainer) -> Router:
     async def project_help_template_handler(message: Message, state: FSMContext) -> None:
         await ensure_user(message)
         await state.clear()
-        await message.answer(PROJECT_HELP_PLACEHOLDER_TEXT, reply_markup=main_menu_keyboard())
+        await message.answer(PROJECT_HELP_PLACEHOLDER_TEXT, reply_markup=user_main_menu())
 
     @router.message(UserFlow.waiting_for_training_question, F.text)
     async def training_question_input_handler(message: Message, state: FSMContext) -> None:
@@ -1079,7 +1109,7 @@ def build_main_router(container: AppContainer) -> Router:
             )
             await message.answer(
                 "Спасибо! Теперь я знаком с этим контекстом и материалами.",
-                reply_markup=main_menu_keyboard(),
+                reply_markup=user_main_menu(),
             )
             await state.clear()
         except FileValidationError as exc:

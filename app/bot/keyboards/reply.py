@@ -1,14 +1,15 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
 
 
 MAIN_MENU_BUTTONS = [
     [KeyboardButton(text="Задать вопрос по организации Лиги Лидеров")],
     [KeyboardButton(text="Материалы программы"), KeyboardButton(text="Домашние задания")],
     [KeyboardButton(text="Расписание Лиги Лидеров")],
-    [KeyboardButton(text="Уточнить контекст моего проекта")],
     [KeyboardButton(text="Нужна помощь с проектом")],
     [KeyboardButton(text="Помощь")],
 ]
+
+PROJECT_CONTEXT_MENU_BUTTON = [KeyboardButton(text="Уточнить контекст моего проекта")]
 
 
 PROJECT_CONTEXT_BUTTONS = [
@@ -30,6 +31,8 @@ MATERIALS_TYPE_BUTTONS = [
     [KeyboardButton(text="Саммари занятий")],
     [KeyboardButton(text="Главное меню")],
 ]
+
+VIDEO_LIBRARY_BUTTON = [KeyboardButton(text="Видео занятий")]
 
 
 HOMEWORK_MENU_BUTTONS = [
@@ -89,8 +92,11 @@ ADMIN_MATERIAL_TYPE_BUTTONS = [
 ]
 
 
-def main_menu_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(keyboard=MAIN_MENU_BUTTONS, resize_keyboard=True)
+def main_menu_keyboard(show_project_context: bool = False) -> ReplyKeyboardMarkup:
+    keyboard = [row.copy() for row in MAIN_MENU_BUTTONS]
+    if show_project_context:
+        keyboard.insert(3, PROJECT_CONTEXT_MENU_BUTTON)
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
 def project_context_keyboard() -> ReplyKeyboardMarkup:
@@ -101,8 +107,11 @@ def materials_season_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=MATERIALS_SEASON_BUTTONS, resize_keyboard=True)
 
 
-def materials_type_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(keyboard=MATERIALS_TYPE_BUTTONS, resize_keyboard=True)
+def materials_type_keyboard(video_enabled: bool = False) -> ReplyKeyboardMarkup:
+    keyboard = [row.copy() for row in MATERIALS_TYPE_BUTTONS]
+    if video_enabled:
+        keyboard.insert(1, VIDEO_LIBRARY_BUTTON)
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
 def homework_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -155,6 +164,15 @@ def feedback_reason_keyboard(message_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Не понял вопрос", callback_data=f"feedback_reason:{message_id}:misunderstood"),
                 InlineKeyboardButton(text="Другая причина", callback_data=f"feedback_reason:{message_id}:other"),
             ],
+        ]
+    )
+
+
+def video_library_keyboard(video_url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Открыть видео внутри Telegram", web_app=WebAppInfo(url=video_url))],
+            [InlineKeyboardButton(text="Открыть ссылку на видео", url=video_url)],
         ]
     )
 

@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     yandexgpt_output_rub_per_1k: float = Field(default=0.20, alias="YANDEXGPT_OUTPUT_RUB_PER_1K")
     yandex_embedding_rub_per_1k: float = Field(default=0.0101, alias="YANDEX_EMBEDDING_RUB_PER_1K")
 
+    show_project_context_menu: bool = Field(default=False, alias="SHOW_PROJECT_CONTEXT_MENU")
+    video_library_enabled: bool = Field(default=False, alias="VIDEO_LIBRARY_ENABLED")
+    video_library_url: str | None = Field(default=None, alias="VIDEO_LIBRARY_URL")
+    video_library_title: str = Field(default="Видео занятий", alias="VIDEO_LIBRARY_TITLE")
+    video_access_note: str = Field(
+        default="Видео-библиотека пока готовится. Если она будет работать через корпоративный VPN, доступ может зависеть от устройства и сети пользователя.",
+        alias="VIDEO_ACCESS_NOTE",
+    )
+
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     @computed_field(return_type=list[int])
