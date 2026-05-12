@@ -227,17 +227,51 @@ def build_main_router(container: AppContainer) -> Router:
             await _delete_message_safely(thinking_message)
             await session.close()
 
-    async def send_materials_list(message: Message) -> None:
-        async with SessionLocal() as session:
-            modules = await DocumentRepository.list_modules(session)
-            docs = await DocumentRepository.list_materials(session, limit=50)
+    async def answer_material_question(
+        message: Message,
+        document_id: int,
+        question: str,
+        state: FSMContext,
+    ) -> None:
+        user, session = await get_user_and_session(message)
+        user_id = user.id
+        thinking_message: Message | None = None
+        try:
+            rate_count = await MessageRepository.count_last_minute(session, user_id)
+            if rate_count >= container.settings.max_user_questions_per_minute:
+                await message.answer("Слишком много запросов за минуту. Попробуй чуть позже.")
+                return
 
-        if modules:
-            lines = ["Доступные модули:"]
-            for number, title, count in modules:
-                lines.append(f"- Модуль {number}: {title or 'Без названия'} ({count} материалов)")
-            await message.answer("\n".join(lines), reply_markup=user_main_menu())
-            return
+            thinking_message = await message.answer(random.choice(THINKING_MESSAGES))
+            result = await container.chat_service.answer_document_question(
+                session=session,
+                user=user,
+                question=question,
+                document_id=document_id,
+            )
+            await message.answer(result.text, reply_markup=feedback_keyboard(result.message_id))
+            await message.answer("Если хочешь продолжить, выбери действие:", reply_markup=user_main_menu())
+            await state.update_data(last_question=question, last_answer=result.text)
+        except Exception as exc:
+            logger.exception("answer_material_question_failed")
+            await session.rollback()
+            await ErrorRepository.create(
+                session=session,
+                context="answer_material_question",
+                error_text=str(exc),
+                user_id=user_id,
+            )
+            await message.answer("Сейчас не получилось получить ответ по материалу. Попробуй позже.")
+        finally:
+            await _delete_message_safely(thinking_message)
+            await session.close()
+
+    async def send_materials_list(message: Message) -> None:
+        user, session = await get_user_and_session(message)
+        try:
+            docs = await DocumentRepository.list_visible_materials(session, user.id, limit=50)
+        finally:
+            await session.close()
 
         if not docs:
             await message.answer(
@@ -248,10 +282,21 @@ def build_main_router(container: AppContainer) -> Router:
             )
             return
 
-        lines = ["Загруженные материалы:"]
+        lines = [
+            "Загруженные материалы:",
+            "",
+        ]
         for doc in docs[:20]:
-            status_hint = "готов" if doc.status.value == "ready" else "обрабатывается"
-            lines.append(f"- {doc.title} ({status_hint})")
+            module_hint = f"модуль {doc.module_number}" if doc.module_number else "без модуля"
+            type_hint = doc.material_type or "без типа"
+            lines.append(f"- id={doc.id} | {doc.title} | {module_hint} | {type_hint}")
+        lines.extend(
+            [
+                "",
+                "Чтобы спросить по конкретному файлу, напиши так:",
+                f"материал {docs[0].id}: кратко что в этом файле?",
+            ]
+        )
         await message.answer("\n".join(lines), reply_markup=user_main_menu())
 
     async def send_homework_list(message: Message) -> None:
@@ -351,6 +396,21 @@ def build_main_router(container: AppContainer) -> Router:
             "module_title": module_title,
             "material_type": material_type,
         }
+
+    def parse_material_question(text_value: str | None) -> tuple[int, str] | None:
+        if not text_value:
+            return None
+        match = re.match(
+            r"^\s*(?:материал|файл|документ)\s*(?:id\s*=?\s*)?(?:№\s*)?(\d+)\s*[:\-—]\s*(.+?)\s*$",
+            text_value,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return None
+        question = match.group(2).strip()
+        if not question:
+            return None
+        return int(match.group(1)), question
 
     @router.callback_query(F.data.startswith("feedback:"))
     async def feedback_callback_handler(callback: CallbackQuery) -> None:
@@ -975,6 +1035,12 @@ def build_main_router(container: AppContainer) -> Router:
 
     @router.message(UserFlow.waiting_for_training_question, F.text)
     async def training_question_input_handler(message: Message, state: FSMContext) -> None:
+        material_question = parse_material_question(message.text)
+        if material_question is not None:
+            document_id, question = material_question
+            await answer_material_question(message, document_id, question, state)
+            await state.clear()
+            return
         await answer_question(message, message.text, state, mode="training_qa")
         await state.clear()
 
@@ -985,16 +1051,34 @@ def build_main_router(container: AppContainer) -> Router:
 
     @router.message(UserFlow.waiting_for_homework_help_question, F.text)
     async def homework_help_question_input_handler(message: Message, state: FSMContext) -> None:
+        material_question = parse_material_question(message.text)
+        if material_question is not None:
+            document_id, question = material_question
+            await answer_material_question(message, document_id, question, state)
+            await state.clear()
+            return
         await answer_question(message, message.text, state, mode="homework_help")
         await state.clear()
 
     @router.message(UserFlow.waiting_for_file_question, F.text)
     async def file_question_input_handler(message: Message, state: FSMContext) -> None:
+        material_question = parse_material_question(message.text)
+        if material_question is not None:
+            document_id, question = material_question
+            await answer_material_question(message, document_id, question, state)
+            await state.clear()
+            return
         await answer_question(message, message.text, state, mode="user_file_qa")
         await state.clear()
 
     @router.message(UserFlow.waiting_for_followup, F.text)
     async def followup_input_handler(message: Message, state: FSMContext) -> None:
+        material_question = parse_material_question(message.text)
+        if material_question is not None:
+            document_id, question = material_question
+            await answer_material_question(message, document_id, question, state)
+            await state.clear()
+            return
         await answer_question(message, message.text, state, mode="followup")
         await state.clear()
 
@@ -1066,11 +1150,13 @@ def build_main_router(container: AppContainer) -> Router:
             type_text = material_type or "другое"
             await message.answer(
                 "Материал загружен и обработан.\n\n"
+                f"- id: {indexed_document.id}\n"
                 f"- файл: {document.file_name}\n"
                 f"- формат: {extension}\n"
                 f"- модуль: {module_text}\n"
                 f"- тип: {type_text}\n"
-                "- видимость: общий материал программы",
+                "- видимость: общий материал программы\n\n"
+                f"Чтобы спросить именно по этому файлу, напиши: материал {indexed_document.id}: твой вопрос",
                 reply_markup=admin_menu_keyboard(),
             )
             await state.clear()
@@ -1130,6 +1216,11 @@ def build_main_router(container: AppContainer) -> Router:
     @router.message(F.text)
     async def fallback_text_handler(message: Message, state: FSMContext) -> None:
         await ensure_user(message)
+        material_question = parse_material_question(message.text)
+        if material_question is not None:
+            document_id, question = material_question
+            await answer_material_question(message, document_id, question, state)
+            return
         # Вертикальный срез: любой текстовый вопрос -> LLM -> ответ -> лог в БД.
         await answer_question(message, message.text, state, mode="free_text")
 

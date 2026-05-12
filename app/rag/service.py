@@ -91,6 +91,43 @@ class RAGService:
         context_text = "\n\n".join(context_blocks)
         return RAGAnswerContext(chunks=selected_chunks, context_text=context_text, sources=sources)
 
+    async def build_context_for_document_question(
+        self,
+        session: AsyncSession,
+        question: str,
+        user_id: int,
+        document_id: int,
+    ) -> RAGAnswerContext:
+        question_embedding = await self.llm_client.create_embedding(question)
+        matches = await ChunkRepository.search_relevant_in_document(
+            session=session,
+            question_embedding=question_embedding,
+            user_id=user_id,
+            document_id=document_id,
+            top_k=self.settings.max_context_chunks,
+        )
+
+        selected_chunks: list[ChunkMatch] = []
+        total_chars = 0
+        for match in matches:
+            if total_chars + len(match.chunk_text) > self.settings.max_context_chars:
+                break
+            selected_chunks.append(match)
+            total_chars += len(match.chunk_text)
+
+        context_blocks: list[str] = []
+        sources: list[dict[str, Any]] = []
+        for index, match in enumerate(selected_chunks, start=1):
+            block = f"[Фрагмент {index} | document_id={document_id} | score={match.score:.3f}]\n{match.chunk_text}"
+            context_blocks.append(block)
+            sources.append(self._source_from_match(match))
+
+        return RAGAnswerContext(
+            chunks=selected_chunks,
+            context_text="\n\n".join(context_blocks),
+            sources=sources,
+        )
+
     async def build_latest_user_file_context(
         self,
         session: AsyncSession,

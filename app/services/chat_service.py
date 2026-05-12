@@ -61,6 +61,23 @@ class ChatService:
                 sources = fallback_context.sources
 
         user_context_block = project_context.strip() if project_context else "Нет"
+        if force_rag and not context_text:
+            answer_text = (
+                "В загруженных материалах я не нашёл точного ответа на этот вопрос.\n\n"
+                "Если хочешь спросить по конкретному файлу, открой «Материалы программы» -> "
+                "«Записи и материалы занятий» и напиши, например: материал 1: кратко что в файле?"
+            )
+            message = await MessageRepository.create(
+                session=session,
+                user_id=user_id,
+                mode=mode,
+                question=question,
+                answer=answer_text,
+                sources=[],
+                token_usage=None,
+            )
+            return ChatAnswer(text=answer_text, sources=[], token_usage=None, mode=mode, message_id=message.id)
+
         if context_text:
             user_prompt = (
                 f"Вопрос пользователя:\n{question}\n\n"
@@ -88,6 +105,61 @@ class ChatService:
             token_usage=result.token_usage,
         )
         return ChatAnswer(text=answer_text, sources=sources, token_usage=result.token_usage, mode=mode, message_id=message.id)
+
+    async def answer_document_question(
+        self,
+        session: AsyncSession,
+        user: User,
+        question: str,
+        document_id: int,
+    ) -> ChatAnswer:
+        user_id = user.id
+        project_context = user.project_context
+        rag_context = await self.rag_service.build_context_for_document_question(
+            session=session,
+            question=question,
+            user_id=user_id,
+            document_id=document_id,
+        )
+        sources = rag_context.sources
+        if not rag_context.context_text:
+            answer_text = (
+                f"Я не нашёл готовый материал с id={document_id} или у тебя нет доступа к нему.\n\n"
+                "Проверь список через «Материалы программы» -> «Записи и материалы занятий»."
+            )
+            message = await MessageRepository.create(
+                session=session,
+                user_id=user_id,
+                mode="material_qa",
+                question=question,
+                answer=answer_text,
+                sources=[],
+                token_usage=None,
+            )
+            return ChatAnswer(text=answer_text, sources=[], token_usage=None, mode="material_qa", message_id=message.id)
+
+        user_context_block = project_context.strip() if project_context else "Нет"
+        user_prompt = (
+            f"Вопрос пользователя по конкретному материалу id={document_id}:\n{question}\n\n"
+            f"Контекст только из выбранного материала:\n{rag_context.context_text}\n\n"
+            f"Описание проекта пользователя:\n{user_context_block}\n\n"
+            "Ответь только на основе выбранного материала. "
+            "Если в этом материале нет ответа, прямо скажи, что точного ответа в выбранном файле нет. "
+            "Сформируй ответ строго в формате: Коротко / Подробнее / Что можно применить / Источники."
+        )
+
+        result = await self.llm_client.chat_completion(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt)
+        answer_text = self._ensure_sources_block(result.answer, sources)
+        message = await MessageRepository.create(
+            session=session,
+            user_id=user_id,
+            mode="material_qa",
+            question=question,
+            answer=answer_text,
+            sources=sources,
+            token_usage=result.token_usage,
+        )
+        return ChatAnswer(text=answer_text, sources=sources, token_usage=result.token_usage, mode="material_qa", message_id=message.id)
 
     async def answer_without_rag(
         self,
@@ -117,7 +189,7 @@ class ChatService:
     @staticmethod
     def _ensure_sources_block(answer: str, sources: list[dict[str, Any]]) -> str:
         normalized = answer.strip()
-        if "Источники" in normalized:
+        if not sources and "Источники" in normalized:
             return normalized
 
         if not sources:
@@ -126,7 +198,7 @@ class ChatService:
                 "Источники: точных источников в загруженных материалах не найдено."
             )
 
-        lines = ["Источники:"]
+        lines = ["Проверенные источники:" if "Источники" in normalized else "Источники:"]
         for source in sources:
             module_number = source.get("module_number")
             module_title = source.get("module_title")

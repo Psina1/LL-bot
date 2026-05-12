@@ -244,6 +244,25 @@ class DocumentRepository:
         return list(result.scalars().all())
 
     @staticmethod
+    async def list_visible_materials(session: AsyncSession, user_id: int, limit: int = 50) -> list[Document]:
+        stmt = (
+            select(Document)
+            .where(
+                and_(
+                    Document.status == DocumentStatusEnum.ready,
+                    or_(
+                        Document.visibility == VisibilityEnum.global_,
+                        and_(Document.visibility == VisibilityEnum.user, Document.owner_user_id == user_id),
+                    ),
+                )
+            )
+            .order_by(Document.created_at.desc())
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
     async def list_homework_materials(session: AsyncSession) -> list[Document]:
         stmt = select(Document).where(
             and_(
@@ -312,6 +331,48 @@ class ChunkRepository:
             .join(Document, Document.id == Chunk.document_id)
             .where(
                 and_(
+                    Document.status == DocumentStatusEnum.ready,
+                    or_(
+                        Document.visibility == VisibilityEnum.global_,
+                        and_(Document.visibility == VisibilityEnum.user, Document.owner_user_id == user_id),
+                    ),
+                )
+            )
+            .order_by(similarity.asc())
+            .limit(top_k)
+        )
+        result = await session.execute(stmt)
+        matches: list[ChunkMatch] = []
+        for chunk, document, distance in result.all():
+            score = 1 - float(distance)
+            matches.append(
+                ChunkMatch(
+                    chunk_id=chunk.id,
+                    chunk_text=chunk.chunk_text,
+                    score=score,
+                    metadata=chunk.chunk_metadata or {},
+                    document_id=document.id,
+                    document_title=document.title,
+                    original_filename=document.original_filename,
+                )
+            )
+        return matches
+
+    @staticmethod
+    async def search_relevant_in_document(
+        session: AsyncSession,
+        question_embedding: list[float],
+        user_id: int,
+        document_id: int,
+        top_k: int,
+    ) -> list[ChunkMatch]:
+        similarity = Chunk.embedding.cosine_distance(question_embedding)
+        stmt = (
+            select(Chunk, Document, similarity.label("distance"))
+            .join(Document, Document.id == Chunk.document_id)
+            .where(
+                and_(
+                    Document.id == document_id,
                     Document.status == DocumentStatusEnum.ready,
                     or_(
                         Document.visibility == VisibilityEnum.global_,
