@@ -50,6 +50,7 @@ from app.bot.texts import (
     VIDEO_LIBRARY_DISABLED_TEXT,
 )
 from app.db.repositories import (
+    AppSettingRepository,
     BotTextRepository,
     DocumentRepository,
     ErrorRepository,
@@ -78,6 +79,10 @@ FILE_PROCESSING_MESSAGES = [
     "Режу материал на фрагменты...",
     "Складываю файл в личный контекст...",
 ]
+
+GROUP_CHAT_TYPES = {"group", "supergroup"}
+ANNOUNCEMENT_CHAT_ID_KEY = "announcement_chat_id"
+ANNOUNCEMENT_CHAT_TITLE_KEY = "announcement_chat_title"
 
 
 def _shorten_project_context(project_context: str, limit: int = 900) -> str:
@@ -176,6 +181,15 @@ def build_main_router(container: AppContainer) -> Router:
     def is_admin_user_id(user_id: int) -> bool:
         return user_id in container.settings.admin_ids
 
+    def is_group_chat(message: Message) -> bool:
+        return message.chat.type in GROUP_CHAT_TYPES
+
+    def command_argument(text_value: str | None) -> str:
+        if not text_value:
+            return ""
+        parts = text_value.split(maxsplit=1)
+        return parts[1].strip() if len(parts) > 1 else ""
+
     async def get_bot_text(key: str) -> str:
         async with SessionLocal() as session:
             return await BotTextRepository.get_value(session, key, BOT_TEXT_DEFAULTS[key])
@@ -186,6 +200,51 @@ def build_main_router(container: AppContainer) -> Router:
             await message.answer("Эта команда доступна только администратору.")
             return False
         return True
+
+    async def get_announcement_chat(session) -> tuple[int | None, str | None]:
+        chat_id_value = await AppSettingRepository.get_value(session, ANNOUNCEMENT_CHAT_ID_KEY)
+        chat_title = await AppSettingRepository.get_value(session, ANNOUNCEMENT_CHAT_TITLE_KEY)
+        if not chat_id_value:
+            return None, chat_title
+        try:
+            return int(chat_id_value), chat_title
+        except ValueError:
+            return None, chat_title
+
+    async def send_reminder_to_group(message: Message, text_value: str, user_id: int | None = None) -> None:
+        reminder_text = text_value.strip()
+        if len(reminder_text) < 3:
+            await message.answer("Пришли текст напоминания. Например: /send_reminder Завтра занятие в 17:00.")
+            return
+
+        async with SessionLocal() as session:
+            chat_id, chat_title = await get_announcement_chat(session)
+
+        if chat_id is None:
+            await message.answer(
+                "Групповой чат ещё не привязан.\n\n"
+                "Когда чат появится, добавь туда бота и отправь в этом чате команду /set_group_chat от имени админа."
+            )
+            return
+
+        try:
+            await message.bot.send_message(chat_id=chat_id, text=reminder_text, parse_mode=None)
+        except Exception as exc:
+            async with SessionLocal() as session:
+                await ErrorRepository.create(
+                    session=session,
+                    context="send_group_reminder",
+                    error_text=str(exc),
+                    user_id=user_id,
+                )
+            await message.answer(
+                "Не получилось отправить напоминание в групповой чат. "
+                "Проверь, что бот добавлен в чат и имеет право писать сообщения."
+            )
+            return
+
+        title_part = f" «{chat_title}»" if chat_title else ""
+        await message.answer(f"Напоминание отправлено в чат{title_part}.", reply_markup=admin_menu_keyboard())
 
     async def answer_question(
         message: Message,
@@ -494,6 +553,71 @@ def build_main_router(container: AppContainer) -> Router:
                 reply_markup=user_main_menu(),
             )
 
+    @router.message(Command("set_group_chat"))
+    async def set_group_chat_handler(message: Message) -> None:
+        if not is_group_chat(message):
+            await message.answer(
+                "Эту команду нужно отправить внутри группового чата программы, куда добавлен бот."
+            )
+            return
+        if not is_admin(message):
+            # В группе молчим для не-админов, чтобы не провоцировать лишний шум.
+            return
+
+        user = await ensure_user(message)
+        chat_title = message.chat.title or str(message.chat.id)
+        async with SessionLocal() as session:
+            await AppSettingRepository.upsert(
+                session,
+                key=ANNOUNCEMENT_CHAT_ID_KEY,
+                value=str(message.chat.id),
+                updated_by_user_id=user.id,
+            )
+            await AppSettingRepository.upsert(
+                session,
+                key=ANNOUNCEMENT_CHAT_TITLE_KEY,
+                value=chat_title,
+                updated_by_user_id=user.id,
+            )
+
+        await message.answer(
+            "Готово, этот чат привязан для напоминаний.\n\n"
+            "Обычные сообщения участников я здесь буду игнорировать. "
+            "Сценарий с вопросами остаётся в личном чате с ботом."
+        )
+
+    @router.message(Command("group_chat_status"))
+    async def group_chat_status_handler(message: Message) -> None:
+        if not is_admin(message):
+            if not is_group_chat(message):
+                await message.answer("Эта команда доступна только администратору.")
+            return
+        await ensure_user(message)
+        async with SessionLocal() as session:
+            chat_id, chat_title = await get_announcement_chat(session)
+        if chat_id is None:
+            await message.answer(
+                "Групповой чат пока не привязан.\n\n"
+                "Когда чат появится, добавь туда бота и отправь в этом чате /set_group_chat."
+            )
+            return
+        title_part = f" «{chat_title}»" if chat_title else ""
+        await message.answer(f"Привязанный чат для напоминаний:{title_part}\nchat_id={chat_id}")
+
+    @router.message(Command("send_reminder"))
+    async def send_reminder_command_handler(message: Message) -> None:
+        if not is_admin(message):
+            if not is_group_chat(message):
+                await message.answer("Эта команда доступна только администратору.")
+            return
+        user = await ensure_user(message)
+        await send_reminder_to_group(message, command_argument(message.text), user.id)
+
+    @router.message(F.chat.type.in_(list(GROUP_CHAT_TYPES)))
+    async def group_silence_handler(message: Message) -> None:
+        # Односторонний режим для группы: все обычные сообщения игнорируем.
+        return
+
     @router.message(CommandStart())
     async def start_handler(message: Message, state: FSMContext) -> None:
         await ensure_user(message)
@@ -518,6 +642,54 @@ def build_main_router(container: AppContainer) -> Router:
             return
         await state.clear()
         await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
+
+    @router.message(F.text == "Админ: напоминание")
+    async def admin_reminder_prompt_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            return
+        async with SessionLocal() as session:
+            chat_id, chat_title = await get_announcement_chat(session)
+
+        chat_line = "чат пока не привязан"
+        if chat_id is not None:
+            chat_line = f"привязан чат «{chat_title or chat_id}»"
+
+        await state.set_state(AdminFlow.waiting_for_reminder_text)
+        await message.answer(
+            "Пришли текст напоминания одним сообщением.\n\n"
+            f"Текущий статус: {chat_line}.\n\n"
+            "Если удобнее командой: /send_reminder текст напоминания",
+            reply_markup=admin_menu_keyboard(),
+            parse_mode=None,
+        )
+
+    @router.message(AdminFlow.waiting_for_reminder_text, F.text)
+    async def admin_reminder_text_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        admin_navigation_texts = {
+            "Админ: меню",
+            "Админ: статус",
+            "Админ: загрузить материал",
+            "Админ: материалы",
+            "Админ: тексты",
+            "Админ: статистика",
+            "Админ: напоминание",
+            "Админ: расходы",
+            "Главное меню",
+        }
+        if message.text in admin_navigation_texts:
+            await state.clear()
+            reply_markup = admin_menu_keyboard() if message.text.startswith("Админ:") else user_main_menu()
+            await message.answer(
+                "Напоминание не отправил. Если нужно отправить текст в чат, нажми «Админ: напоминание» ещё раз.",
+                reply_markup=reply_markup,
+            )
+            return
+        user = await ensure_user(message)
+        await send_reminder_to_group(message, message.text, user.id)
+        await state.clear()
 
     @router.message(Command("upload_global_material"))
     @router.message(F.text == "Админ: загрузить материал")

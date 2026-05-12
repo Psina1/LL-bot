@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
+    AppSetting,
     BotText,
     Chunk,
     Document,
@@ -173,6 +174,28 @@ class BotTextRepository:
     async def list_all(session: AsyncSession) -> list[BotText]:
         result = await session.execute(select(BotText).order_by(BotText.key))
         return list(result.scalars().all())
+
+
+class AppSettingRepository:
+    @staticmethod
+    async def get_value(session: AsyncSession, key: str) -> str | None:
+        result = await session.execute(select(AppSetting.value).where(AppSetting.key == key))
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def upsert(
+        session: AsyncSession,
+        key: str,
+        value: str,
+        updated_by_user_id: int | None = None,
+    ) -> None:
+        stmt = pg_insert(AppSetting).values(key=key, value=value, updated_by_user_id=updated_by_user_id)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[AppSetting.key],
+            set_={"value": value, "updated_by_user_id": updated_by_user_id, "updated_at": func.now()},
+        )
+        await session.execute(stmt)
+        await session.commit()
 
 
 class ErrorRepository:
