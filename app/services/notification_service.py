@@ -7,6 +7,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot
+from aiogram.enums import ParseMode
 from aiogram.types import FSInputFile
 
 from app.bot.texts import BOT_TEXT_DEFAULTS
@@ -90,7 +91,7 @@ class NotificationService:
                 continue
 
             try:
-                await bot.send_message(chat_id=recipient.telegram_id, text=text, parse_mode=None)
+                await bot.send_message(chat_id=recipient.telegram_id, text=text, parse_mode=ParseMode.HTML)
                 if ics_path is not None:
                     await bot.send_document(
                         chat_id=recipient.telegram_id,

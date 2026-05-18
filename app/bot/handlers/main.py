@@ -142,6 +142,12 @@ def _dir_size_mb(path: Path) -> float:
     return total_bytes / 1024 / 1024
 
 
+def _message_html_text(message: Message) -> str:
+    # Telegram stores rich links and formatting in entities; html_text preserves them safely.
+    html_text = getattr(message, "html_text", None)
+    return (html_text or message.text or "").strip()
+
+
 async def _delete_message_safely(message: Message | None) -> None:
     if message is None:
         return
@@ -640,12 +646,12 @@ def build_main_router(container: AppContainer) -> Router:
     async def start_handler(message: Message, state: FSMContext) -> None:
         await ensure_user(message)
         await state.clear()
-        await message.answer(await get_bot_text("welcome"), reply_markup=user_main_menu(), parse_mode=None)
+        await message.answer(await get_bot_text("welcome"), reply_markup=user_main_menu())
 
     @router.message(Command("help"))
     async def help_handler(message: Message) -> None:
         await ensure_user(message)
-        await message.answer(await get_bot_text("help"), reply_markup=user_main_menu(), parse_mode=None)
+        await message.answer(await get_bot_text("help"), reply_markup=user_main_menu())
 
     @router.message(Command("cancel"))
     async def cancel_handler(message: Message, state: FSMContext) -> None:
@@ -1079,12 +1085,12 @@ def build_main_router(container: AppContainer) -> Router:
             await message.answer("Текст слишком короткий. Пришли нормальный текст или нажми /cancel.")
             return
 
-        await state.update_data(pending_bot_text=message.text.strip())
+        pending_text = _message_html_text(message)
+        await state.update_data(pending_bot_text=pending_text)
         await state.set_state(AdminFlow.waiting_for_bot_text_confirm)
         await message.answer(
-            f"Предпросмотр текста «{BOT_TEXT_LABELS[key]}»:\n\n{message.text.strip()}",
+            f"Предпросмотр текста «{BOT_TEXT_LABELS[key]}»:\n\n{pending_text}",
             reply_markup=admin_text_preview_keyboard(),
-            parse_mode=None,
         )
 
     @router.callback_query(AdminFlow.waiting_for_bot_text_confirm, F.data.in_(["admin_text:save", "admin_text:cancel"]))
@@ -1145,12 +1151,12 @@ def build_main_router(container: AppContainer) -> Router:
     @router.message(F.text == "Помощь")
     async def help_button_handler(message: Message) -> None:
         await ensure_user(message)
-        await message.answer(await get_bot_text("help"), reply_markup=user_main_menu(), parse_mode=None)
+        await message.answer(await get_bot_text("help"), reply_markup=user_main_menu())
 
     @router.message(F.text.in_(["Расписание Лиги Лидеров", "Расписание программы обучения"]))
     async def schedule_handler(message: Message) -> None:
         await ensure_user(message)
-        await message.answer(await get_bot_text("schedule"), reply_markup=user_main_menu(), parse_mode=None)
+        await message.answer(await get_bot_text("schedule"), reply_markup=user_main_menu())
 
     @router.message(F.text == "Настройка уведомлений")
     async def notification_settings_handler(message: Message) -> None:
