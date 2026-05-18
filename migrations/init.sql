@@ -66,6 +66,32 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS user_notification_settings (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    notification_time VARCHAR(5) NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS notification_deliveries (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    notification_key VARCHAR(100) NOT NULL,
+    delivery_date DATE NOT NULL,
+    scheduled_time VARCHAR(5) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'sent',
+    error_text TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_notification_delivery_user_key_date_time UNIQUE (
+        user_id,
+        notification_key,
+        delivery_date,
+        scheduled_time
+    )
+);
+
 CREATE TABLE IF NOT EXISTS user_files (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -96,6 +122,8 @@ CREATE INDEX IF NOT EXISTS ix_documents_visibility_owner ON documents(visibility
 CREATE INDEX IF NOT EXISTS ix_documents_module_number ON documents(module_number);
 CREATE INDEX IF NOT EXISTS ix_chunks_document_id ON chunks(document_id);
 CREATE INDEX IF NOT EXISTS ix_messages_user_created_at ON messages(user_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_user_notification_settings_user_id ON user_notification_settings(user_id);
+CREATE INDEX IF NOT EXISTS ix_notification_deliveries_user_id ON notification_deliveries(user_id);
 CREATE INDEX IF NOT EXISTS ix_user_files_user_id ON user_files(user_id);
 CREATE INDEX IF NOT EXISTS ix_user_files_document_id ON user_files(document_id);
 CREATE INDEX IF NOT EXISTS ix_errors_created_at ON errors(created_at DESC);

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    Boolean,
+    Date,
     JSON,
     BigInteger,
     DateTime,
@@ -157,6 +159,42 @@ class MessageFeedback(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (UniqueConstraint("message_id", "user_id", name="uq_message_feedback_message_user"),)
+
+
+class UserNotificationSetting(Base):
+    __tablename__ = "user_notification_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True)
+    notification_time: Mapped[str] = mapped_column(String(5))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class NotificationDelivery(Base):
+    __tablename__ = "notification_deliveries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    notification_key: Mapped[str] = mapped_column(String(100))
+    delivery_date: Mapped[date] = mapped_column(Date)
+    scheduled_time: Mapped[str] = mapped_column(String(5))
+    status: Mapped[str] = mapped_column(String(20), default="sent")
+    error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "notification_key",
+            "delivery_date",
+            "scheduled_time",
+            name="uq_notification_delivery_user_key_date_time",
+        ),
+    )
 
 
 class BotText(Base):

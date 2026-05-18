@@ -1,3 +1,6 @@
+from app.notifications.constants import NOTIFICATION_TEXT_DEFAULT, NOTIFICATION_TEXT_KEY
+
+
 WELCOME_TEXT = (
     "Привет! Я - твой ассистент в рамках программы развития руководителей «Лига лидеров».\n\n"
     "Я умею:\n"
@@ -93,10 +96,12 @@ BOT_TEXT_DEFAULTS = {
     "welcome": WELCOME_TEXT,
     "help": HELP_TEXT,
     "schedule": SCHEDULE_TEXT,
+    NOTIFICATION_TEXT_KEY: NOTIFICATION_TEXT_DEFAULT,
 }
 
 BOT_TEXT_LABELS = {
     "welcome": "приветствие",
     "help": "помощь",
     "schedule": "расписание",
+    NOTIFICATION_TEXT_KEY: "текст уведомления",
 }

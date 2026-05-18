@@ -33,7 +33,12 @@ async def run_polling() -> None:
     dp.include_router(build_router(container))
 
     logging.getLogger(__name__).info("Bot started in polling mode")
-    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    notification_task = asyncio.create_task(container.notification_service.run(bot))
+    try:
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    finally:
+        notification_task.cancel()
+        await asyncio.gather(notification_task, return_exceptions=True)
 
 
 if __name__ == "__main__":

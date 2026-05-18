@@ -17,9 +17,11 @@ from app.db.models import (
     ErrorLog,
     Message,
     MessageFeedback,
+    NotificationDelivery,
     RoleEnum,
     User,
     UserFile,
+    UserNotificationSetting,
     VisibilityEnum,
 )
 
@@ -147,6 +149,108 @@ class MessageFeedbackRepository:
         )
         result = await session.execute(stmt)
         return {str(reason): int(count or 0) for reason, count in result.all()}
+
+
+@dataclass(slots=True)
+class NotificationRecipient:
+    user_id: int
+    telegram_id: int
+    notification_time: str
+
+
+class UserNotificationSettingRepository:
+    @staticmethod
+    async def get_for_user(session: AsyncSession, user_id: int) -> UserNotificationSetting | None:
+        result = await session.execute(
+            select(UserNotificationSetting).where(UserNotificationSetting.user_id == user_id)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def upsert_time(session: AsyncSession, user_id: int, notification_time: str) -> None:
+        stmt = pg_insert(UserNotificationSetting).values(
+            user_id=user_id,
+            notification_time=notification_time,
+            enabled=True,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[UserNotificationSetting.user_id],
+            set_={"notification_time": notification_time, "enabled": True, "updated_at": func.now()},
+        )
+        await session.execute(stmt)
+        await session.commit()
+
+    @staticmethod
+    async def disable(session: AsyncSession, user_id: int) -> None:
+        setting = await UserNotificationSettingRepository.get_for_user(session, user_id)
+        if setting is None:
+            return
+        setting.enabled = False
+        await session.commit()
+
+    @staticmethod
+    async def list_due_recipients(session: AsyncSession, notification_time: str) -> list[NotificationRecipient]:
+        stmt = (
+            select(User.id, User.telegram_id, UserNotificationSetting.notification_time)
+            .join(UserNotificationSetting, UserNotificationSetting.user_id == User.id)
+            .where(
+                and_(
+                    UserNotificationSetting.enabled.is_(True),
+                    UserNotificationSetting.notification_time == notification_time,
+                )
+            )
+        )
+        result = await session.execute(stmt)
+        return [
+            NotificationRecipient(user_id=user_id, telegram_id=telegram_id, notification_time=time_value)
+            for user_id, telegram_id, time_value in result.all()
+        ]
+
+
+class NotificationDeliveryRepository:
+    @staticmethod
+    async def was_processed(
+        session: AsyncSession,
+        user_id: int,
+        notification_key: str,
+        delivery_date,
+        scheduled_time: str,
+    ) -> bool:
+        stmt = select(func.count(NotificationDelivery.id)).where(
+            and_(
+                NotificationDelivery.user_id == user_id,
+                NotificationDelivery.notification_key == notification_key,
+                NotificationDelivery.delivery_date == delivery_date,
+                NotificationDelivery.scheduled_time == scheduled_time,
+            )
+        )
+        result = await session.execute(stmt)
+        return int(result.scalar() or 0) > 0
+
+    @staticmethod
+    async def mark(
+        session: AsyncSession,
+        user_id: int,
+        notification_key: str,
+        delivery_date,
+        scheduled_time: str,
+        status: str,
+        error_text: str | None = None,
+    ) -> None:
+        stmt = pg_insert(NotificationDelivery).values(
+            user_id=user_id,
+            notification_key=notification_key,
+            delivery_date=delivery_date,
+            scheduled_time=scheduled_time,
+            status=status,
+            error_text=error_text[:10000] if error_text else None,
+        )
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_notification_delivery_user_key_date_time",
+            set_={"status": status, "error_text": error_text[:10000] if error_text else None},
+        )
+        await session.execute(stmt)
+        await session.commit()
 
 
 class BotTextRepository:

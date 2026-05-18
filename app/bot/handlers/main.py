@@ -28,6 +28,7 @@ from app.bot.keyboards.reply import (
     main_menu_keyboard,
     materials_season_keyboard,
     materials_type_keyboard,
+    notification_settings_keyboard,
     project_context_keyboard,
     project_help_keyboard,
     video_library_keyboard,
@@ -56,10 +57,17 @@ from app.db.repositories import (
     ErrorRepository,
     MessageFeedbackRepository,
     MessageRepository,
+    UserNotificationSettingRepository,
     StatsRepository,
     UserRepository,
 )
 from app.db.session import SessionLocal
+from app.notifications.constants import (
+    NOTIFICATION_ICS_FILENAME_KEY,
+    NOTIFICATION_ICS_PATH_KEY,
+    NOTIFICATION_TEXT_KEY,
+    NOTIFICATION_TIME_OPTIONS,
+)
 from app.services.container import AppContainer
 from app.services.document_service import FileValidationError
 
@@ -422,6 +430,16 @@ def build_main_router(container: AppContainer) -> Router:
         lines.append(f"- Режим запуска: {container.settings.bot_mode}")
         lines.append(f"- Окружение: {container.settings.env}")
         lines.append(f"- Лимит файла: {container.settings.max_file_size_mb} МБ")
+        lines.append(
+            f"- Уведомления: {'включены' if container.settings.notifications_enabled else 'выключены'}, "
+            f"таймзона={container.settings.notification_timezone}"
+        )
+        try:
+            async with SessionLocal() as session:
+                ics_filename = await AppSettingRepository.get_value(session, NOTIFICATION_ICS_FILENAME_KEY)
+        except Exception:
+            ics_filename = None
+        lines.append(f"- ICS для уведомлений: {ics_filename or 'не загружен'}")
 
         lines.append("")
         lines.append("Последние ошибки:")
@@ -676,6 +694,7 @@ def build_main_router(container: AppContainer) -> Router:
             "Админ: тексты",
             "Админ: статистика",
             "Админ: напоминание",
+            "Админ: загрузить ICS",
             "Админ: расходы",
             "Главное меню",
         }
@@ -929,6 +948,81 @@ def build_main_router(container: AppContainer) -> Router:
         await message.answer("Проверяю БД, LLM и RAG...")
         await message.answer(await build_admin_status_report(), reply_markup=admin_menu_keyboard(), parse_mode=None)
 
+    @router.message(Command("upload_ics"))
+    @router.message(F.text == "Админ: загрузить ICS")
+    async def admin_upload_ics_prompt_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            return
+        await state.set_state(AdminFlow.waiting_for_notification_ics)
+        await message.answer(
+            "Пришли файл `.ics`, который нужно прикладывать к уведомлениям.\n\n"
+            "Это не материал для RAG, бот просто сохранит календарный файл и будет отправлять его вместе с уведомлением.",
+            reply_markup=admin_menu_keyboard(),
+            parse_mode=None,
+        )
+
+    @router.message(AdminFlow.waiting_for_notification_ics, F.document)
+    async def admin_upload_ics_file_handler(message: Message, state: FSMContext) -> None:
+        user, session = await get_user_and_session(message)
+        try:
+            if not is_admin(message):
+                await message.answer("Эта команда доступна только администратору.")
+                await state.clear()
+                return
+
+            document = message.document
+            filename = Path(document.file_name or "notification.ics").name
+            if not filename.lower().endswith(".ics"):
+                await message.answer("Нужен именно `.ics` файл.", parse_mode=None)
+                return
+            if document.file_size and document.file_size > container.settings.max_file_size_bytes:
+                await message.answer(
+                    f"Файл слишком большой. Максимальный размер: {container.settings.max_file_size_mb} МБ."
+                )
+                return
+
+            notifications_dir = container.settings.data_dir / "notifications"
+            notifications_dir.mkdir(parents=True, exist_ok=True)
+            target_path = notifications_dir / filename
+            file_info = await message.bot.get_file(document.file_id)
+            file_data = await message.bot.download_file(file_info.file_path)
+            target_path.write_bytes(file_data.read())
+
+            await AppSettingRepository.upsert(
+                session,
+                key=NOTIFICATION_ICS_PATH_KEY,
+                value=str(target_path),
+                updated_by_user_id=user.id,
+            )
+            await AppSettingRepository.upsert(
+                session,
+                key=NOTIFICATION_ICS_FILENAME_KEY,
+                value=filename,
+                updated_by_user_id=user.id,
+            )
+
+            await message.answer(
+                "ICS-файл сохранён. Теперь он будет прикладываться к уведомлениям.\n\n"
+                f"Файл: {filename}",
+                reply_markup=admin_menu_keyboard(),
+                parse_mode=None,
+            )
+            await state.clear()
+        except Exception as exc:
+            logger.exception("notification_ics_upload_failed")
+            await ErrorRepository.create(session, context="notification_ics_upload", error_text=str(exc), user_id=user.id)
+            await message.answer("Не получилось сохранить ICS-файл. Попробуй ещё раз или пришли другой файл.")
+        finally:
+            await session.close()
+
+    @router.message(AdminFlow.waiting_for_notification_ics)
+    async def admin_upload_ics_invalid_handler(message: Message, state: FSMContext) -> None:
+        if message.text == "Админ: меню":
+            await state.clear()
+            await message.answer("Загрузку ICS отменил.", reply_markup=admin_menu_keyboard())
+            return
+        await message.answer("Нужен именно файл `.ics`. Можно отменить через /cancel.", parse_mode=None)
+
     @router.message(F.text == "Админ: тексты")
     async def admin_texts_handler(message: Message) -> None:
         if not await require_admin(message):
@@ -944,7 +1038,7 @@ def build_main_router(container: AppContainer) -> Router:
         lines.append("Выбери текст, который нужно заменить. Удаления и опасных действий здесь нет.")
         await message.answer("\n".join(lines), reply_markup=admin_texts_keyboard())
 
-    @router.message(F.text.in_(["Изменить приветствие", "Изменить помощь", "Изменить расписание"]))
+    @router.message(F.text.in_(["Изменить приветствие", "Изменить помощь", "Изменить расписание", "Изменить текст уведомления"]))
     async def admin_edit_text_prompt_handler(message: Message, state: FSMContext) -> None:
         if not await require_admin(message):
             return
@@ -952,6 +1046,7 @@ def build_main_router(container: AppContainer) -> Router:
             "Изменить приветствие": "welcome",
             "Изменить помощь": "help",
             "Изменить расписание": "schedule",
+            "Изменить текст уведомления": NOTIFICATION_TEXT_KEY,
         }
         key = mapping[message.text]
         current_value = await get_bot_text(key)
@@ -1056,6 +1151,48 @@ def build_main_router(container: AppContainer) -> Router:
     async def schedule_handler(message: Message) -> None:
         await ensure_user(message)
         await message.answer(await get_bot_text("schedule"), reply_markup=user_main_menu(), parse_mode=None)
+
+    @router.message(F.text == "Настройка уведомлений")
+    async def notification_settings_handler(message: Message) -> None:
+        user, session = await get_user_and_session(message)
+        try:
+            setting = await UserNotificationSettingRepository.get_for_user(session, user.id)
+            if setting is None or not setting.enabled:
+                current_line = "Сейчас уведомления не настроены."
+            else:
+                current_line = f"Сейчас уведомления будут приходить в {setting.notification_time}."
+
+            await message.answer(
+                "Настройка уведомлений.\n\n"
+                f"{current_line}\n\n"
+                "Выбери удобное время. Настройка времени одна для всех типов уведомлений: "
+                "организационные моменты, домашние задания и будущие напоминания по программе.",
+                reply_markup=notification_settings_keyboard(),
+            )
+        finally:
+            await session.close()
+
+    @router.message(F.text.startswith("Уведомления: "))
+    async def notification_time_handler(message: Message) -> None:
+        user, session = await get_user_and_session(message)
+        try:
+            choice = message.text.replace("Уведомления: ", "", 1).strip()
+            if choice == "отключить":
+                await UserNotificationSettingRepository.disable(session, user.id)
+                await message.answer("Уведомления отключены.", reply_markup=user_main_menu())
+                return
+            if choice not in NOTIFICATION_TIME_OPTIONS:
+                await message.answer("Выбери время кнопкой ниже.", reply_markup=notification_settings_keyboard())
+                return
+
+            await UserNotificationSettingRepository.upsert_time(session, user.id, choice)
+            await message.answer(
+                f"Готово. Уведомления будут приходить в {choice} по московскому времени.\n\n"
+                "Пока текст тестовый, позже здесь будут разные уведомления по направлениям программы.",
+                reply_markup=user_main_menu(),
+            )
+        finally:
+            await session.close()
 
     @router.message(F.text.in_(["Задать вопрос по организации Лиги Лидеров", "Задать вопрос по обучению"]))
     async def ask_training_question_handler(message: Message, state: FSMContext) -> None:

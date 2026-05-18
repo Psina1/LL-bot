@@ -1,11 +1,14 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
 
+from app.notifications.constants import NOTIFICATION_TIME_OPTIONS
+
 
 MAIN_MENU_BUTTONS = [
     [KeyboardButton(text="Задать вопрос по организации Лиги Лидеров")],
     [KeyboardButton(text="Материалы программы"), KeyboardButton(text="Домашние задания")],
     [KeyboardButton(text="Расписание Лиги Лидеров")],
     [KeyboardButton(text="Нужна помощь с проектом")],
+    [KeyboardButton(text="Настройка уведомлений")],
     [KeyboardButton(text="Помощь")],
 ]
 
@@ -50,11 +53,18 @@ PROJECT_HELP_BUTTONS = [
 ]
 
 
+NOTIFICATION_SETTINGS_BUTTONS = [
+    [KeyboardButton(text=f"Уведомления: {time_value}") for time_value in NOTIFICATION_TIME_OPTIONS],
+    [KeyboardButton(text="Уведомления: отключить")],
+    [KeyboardButton(text="Главное меню")],
+]
+
+
 ADMIN_MENU_BUTTONS = [
     [KeyboardButton(text="Админ: статус")],
     [KeyboardButton(text="Админ: загрузить материал"), KeyboardButton(text="Админ: материалы")],
     [KeyboardButton(text="Админ: тексты"), KeyboardButton(text="Админ: статистика")],
-    [KeyboardButton(text="Админ: напоминание")],
+    [KeyboardButton(text="Админ: напоминание"), KeyboardButton(text="Админ: загрузить ICS")],
     [KeyboardButton(text="Админ: расходы")],
     [KeyboardButton(text="Главное меню")],
 ]
@@ -64,6 +74,7 @@ ADMIN_TEXTS_BUTTONS = [
     [KeyboardButton(text="Изменить приветствие")],
     [KeyboardButton(text="Изменить помощь")],
     [KeyboardButton(text="Изменить расписание")],
+    [KeyboardButton(text="Изменить текст уведомления")],
     [KeyboardButton(text="Админ: меню")],
 ]
 
@@ -121,6 +132,10 @@ def homework_menu_keyboard() -> ReplyKeyboardMarkup:
 
 def project_help_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=PROJECT_HELP_BUTTONS, resize_keyboard=True)
+
+
+def notification_settings_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=NOTIFICATION_SETTINGS_BUTTONS, resize_keyboard=True)
 
 
 def admin_menu_keyboard() -> ReplyKeyboardMarkup:

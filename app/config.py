@@ -61,6 +61,10 @@ class Settings(BaseSettings):
         alias="VIDEO_ACCESS_NOTE",
     )
 
+    notifications_enabled: bool = Field(default=True, alias="NOTIFICATIONS_ENABLED")
+    notification_timezone: str = Field(default="Europe/Moscow", alias="NOTIFICATION_TIMEZONE")
+    notification_check_interval_seconds: int = Field(default=30, alias="NOTIFICATION_CHECK_INTERVAL_SECONDS")
+
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     @computed_field(return_type=list[int])

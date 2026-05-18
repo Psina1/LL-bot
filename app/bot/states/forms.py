@@ -19,3 +19,4 @@ class AdminFlow(StatesGroup):
     waiting_for_bot_text = State()
     waiting_for_bot_text_confirm = State()
     waiting_for_reminder_text = State()
+    waiting_for_notification_ics = State()
