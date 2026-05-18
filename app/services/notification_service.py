@@ -21,6 +21,7 @@ from app.db.repositories import (
 from app.db.session import SessionLocal
 from app.notifications.constants import (
     DAILY_TEST_NOTIFICATION_KEY,
+    NOTIFICATION_ICS_CAPTION,
     NOTIFICATION_ICS_FILENAME_KEY,
     NOTIFICATION_ICS_PATH_KEY,
     NOTIFICATION_TEXT_KEY,
@@ -94,6 +95,7 @@ class NotificationService:
                     await bot.send_document(
                         chat_id=recipient.telegram_id,
                         document=FSInputFile(ics_path, filename=ics_filename or ics_path.name),
+                        caption=NOTIFICATION_ICS_CAPTION,
                         parse_mode=None,
                     )
                 async with SessionLocal() as session:

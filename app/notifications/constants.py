@@ -7,5 +7,6 @@ NOTIFICATION_TEXT_DEFAULT = "Тестовое уведомление"
 
 NOTIFICATION_ICS_PATH_KEY = "notification_ics_path"
 NOTIFICATION_ICS_FILENAME_KEY = "notification_ics_filename"
+NOTIFICATION_ICS_CAPTION = "Файл для календаря: открой его и добавь событие в свой календарь."
 
 DAILY_TEST_NOTIFICATION_KEY = "daily_test"
