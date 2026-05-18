@@ -94,7 +94,6 @@ class NotificationService:
                     await bot.send_document(
                         chat_id=recipient.telegram_id,
                         document=FSInputFile(ics_path, filename=ics_filename or ics_path.name),
-                        caption="Календарный файл для добавления события.",
                         parse_mode=None,
                     )
                 async with SessionLocal() as session:
