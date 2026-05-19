@@ -18,6 +18,10 @@ data/tmp/*
 !data/uploads/.gitkeep
 !data/materials/.gitkeep
 !data/tmp/.gitkeep
+# Training materials can contain non-public content. Upload them via bot/admin flow, not to Git.
+/*.pdf
+/*.docx
+/*.pptx
 logs/
 *.log
 *.db

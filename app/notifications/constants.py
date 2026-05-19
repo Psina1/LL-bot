@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-NOTIFICATION_TIME_OPTIONS = ("12:00", "15:00", "18:00")
+NOTIFICATION_TIME_OPTIONS = ("09:00", "12:00", "15:00")
 
 NOTIFICATION_TEXT_KEY = "notification"
 NOTIFICATION_TEXT_DEFAULT = "Тестовое уведомление"

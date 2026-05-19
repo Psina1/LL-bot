@@ -4,12 +4,10 @@ from app.notifications.constants import NOTIFICATION_TIME_OPTIONS
 
 
 MAIN_MENU_BUTTONS = [
-    [KeyboardButton(text="Задать вопрос по организации Лиги Лидеров")],
+    [KeyboardButton(text="Задать вопрос")],
     [KeyboardButton(text="Материалы программы"), KeyboardButton(text="Домашние задания")],
     [KeyboardButton(text="Расписание Лиги Лидеров")],
-    [KeyboardButton(text="Нужна помощь с проектом")],
-    [KeyboardButton(text="Настройка уведомлений")],
-    [KeyboardButton(text="Помощь")],
+    [KeyboardButton(text="Настройки уведомлений")],
 ]
 
 PROJECT_CONTEXT_MENU_BUTTON = [KeyboardButton(text="Уточнить контекст моего проекта")]
@@ -164,6 +162,28 @@ def feedback_keyboard(message_id: int) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="Полезно", callback_data=f"feedback:{message_id}:yes"),
                 InlineKeyboardButton(text="Не полезно", callback_data=f"feedback:{message_id}:no"),
+            ]
+        ]
+    )
+
+
+def question_section_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Вопрос по программе", callback_data="question_section:program")],
+            [InlineKeyboardButton(text="Технический вопрос", callback_data="question_section:technical")],
+            [InlineKeyboardButton(text="Другое", callback_data="question_section:other")],
+            [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
+        ]
+    )
+
+
+def start_notification_time_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=time_value, callback_data=f"start_notification_time:{time_value}")
+                for time_value in NOTIFICATION_TIME_OPTIONS
             ]
         ]
     )

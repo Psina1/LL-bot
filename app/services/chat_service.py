@@ -35,6 +35,7 @@ class ChatService:
         question: str,
         mode: str = "training_qa",
         force_rag: bool = True,
+        extra_context: str | None = None,
     ) -> ChatAnswer:
         user_id = user.id
         project_context = user.project_context
@@ -64,8 +65,7 @@ class ChatService:
         if force_rag and not context_text:
             answer_text = (
                 "В загруженных материалах я не нашёл точного ответа на этот вопрос.\n\n"
-                "Если хочешь спросить по конкретному файлу, открой «Материалы программы» -> "
-                "«Записи и материалы занятий» и напиши, например: материал 1: кратко что в файле?"
+                "Если вопрос срочный или организационный, задай его в общий чат программы или напиши организаторам."
             )
             message = await MessageRepository.create(
                 session=session,
@@ -82,15 +82,18 @@ class ChatService:
             user_prompt = (
                 f"Вопрос пользователя:\n{question}\n\n"
                 f"Контекст по материалам:\n{context_text}\n\n"
+                f"Дополнительный контекст раздела:\n{extra_context or 'Нет'}\n\n"
                 f"Описание проекта пользователя:\n{user_context_block}\n\n"
                 "Сформируй ответ строго в формате: Коротко / Подробнее / Что можно применить / Источники."
             )
         else:
             user_prompt = (
                 f"Вопрос пользователя:\n{question}\n\n"
+                f"Служебный контекст:\n{extra_context or 'Нет'}\n\n"
                 "Контекст по материалам: отсутствует.\n"
                 f"Описание проекта пользователя:\n{user_context_block}\n\n"
-                "Если в контексте нет ответа, прямо скажи, что точного ответа в загруженных материалах нет."
+                "Если служебный контекст отвечает на вопрос, используй его. "
+                "Если ответа нет, прямо скажи, что точного ответа в загруженных материалах нет."
             )
 
         result = await self.llm_client.chat_completion(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt)

@@ -31,6 +31,8 @@ from app.bot.keyboards.reply import (
     notification_settings_keyboard,
     project_context_keyboard,
     project_help_keyboard,
+    question_section_keyboard,
+    start_notification_time_keyboard,
     video_library_keyboard,
 )
 from app.bot.states.forms import AdminFlow, UserFlow
@@ -204,6 +206,29 @@ def build_main_router(container: AppContainer) -> Router:
         parts = text_value.split(maxsplit=1)
         return parts[1].strip() if len(parts) > 1 else ""
 
+    def question_section_context(section: str | None) -> tuple[str, str | None, bool]:
+        if section == "technical":
+            return (
+                "technical_question",
+                "Раздел вопроса: технический вопрос. "
+                "Если вопрос про работу бота, записи занятий, доступы, технические ошибки или платформу обучения «ПРОГРЕСС», "
+                "ответь коротко и предложи написать Илье в Telegram: @reptiloid0. "
+                "Не выдумывай инструкции по платформе, если они не указаны в загруженных материалах.",
+                False,
+            )
+        if section == "other":
+            return (
+                "other_question",
+                "Раздел вопроса: другое. Сначала опирайся на загруженные материалы программы. "
+                "Если ответа нет, честно скажи, что точного ответа нет, и предложи задать вопрос в общий чат программы.",
+                True,
+            )
+        return (
+            "program_question",
+            "Раздел вопроса: вопрос по программе. Отвечай по загруженным материалам программы и организационному контексту.",
+            True,
+        )
+
     async def get_bot_text(key: str) -> str:
         async with SessionLocal() as session:
             return await BotTextRepository.get_value(session, key, BOT_TEXT_DEFAULTS[key])
@@ -265,6 +290,8 @@ def build_main_router(container: AppContainer) -> Router:
         question: str,
         state: FSMContext,
         mode: str = "training_qa",
+        force_rag: bool = True,
+        extra_context: str | None = None,
     ) -> None:
         user, session = await get_user_and_session(message)
         user_id = user.id
@@ -281,7 +308,8 @@ def build_main_router(container: AppContainer) -> Router:
                 user=user,
                 question=question,
                 mode=mode,
-                force_rag=True,
+                force_rag=force_rag,
+                extra_context=extra_context,
             )
             await message.answer(result.text, reply_markup=feedback_keyboard(result.message_id))
             await message.answer("Если хочешь продолжить, выбери действие:", reply_markup=user_main_menu())
@@ -577,6 +605,48 @@ def build_main_router(container: AppContainer) -> Router:
                 reply_markup=user_main_menu(),
             )
 
+    @router.callback_query(F.data == "menu:main")
+    async def inline_main_menu_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
+        await state.clear()
+        await callback.answer()
+        if callback.message:
+            await callback.message.answer("Выбери действие:", reply_markup=user_main_menu())
+
+    @router.callback_query(F.data.startswith("start_notification_time:"))
+    async def start_notification_time_callback_handler(callback: CallbackQuery) -> None:
+        time_value = (callback.data or "").split(":", 1)[1]
+        if time_value not in NOTIFICATION_TIME_OPTIONS:
+            await callback.answer("Не понял время уведомлений.")
+            return
+        async with SessionLocal() as session:
+            user = await UserRepository.upsert_telegram_user(
+                session=session,
+                telegram_id=callback.from_user.id,
+                username=callback.from_user.username,
+                first_name=callback.from_user.first_name,
+                last_name=callback.from_user.last_name,
+                is_admin=is_admin_user_id(callback.from_user.id),
+            )
+            await UserNotificationSettingRepository.upsert_time(session, user.id, time_value)
+        await callback.answer("Сохранил время уведомлений.")
+        if callback.message:
+            await callback.message.answer(
+                f"Готово. Уведомления будут приходить в {time_value} по московскому времени.",
+                reply_markup=user_main_menu(),
+            )
+
+    @router.callback_query(F.data.startswith("question_section:"))
+    async def question_section_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
+        section = (callback.data or "").split(":", 1)[1]
+        if section not in {"program", "technical", "other"}:
+            await callback.answer("Не понял раздел вопроса.")
+            return
+        await state.set_state(UserFlow.waiting_for_categorized_question)
+        await state.update_data(question_section=section)
+        await callback.answer()
+        if callback.message:
+            await callback.message.answer("Напиши свой вопрос.", reply_markup=user_main_menu())
+
     @router.message(Command("set_group_chat"))
     async def set_group_chat_handler(message: Message) -> None:
         if not is_group_chat(message):
@@ -647,6 +717,11 @@ def build_main_router(container: AppContainer) -> Router:
         await ensure_user(message)
         await state.clear()
         await message.answer(await get_bot_text("welcome"), reply_markup=user_main_menu())
+        await message.answer(
+            "Я буду напоминать тебе о занятиях и домашних заданиях. "
+            "Выбери время, когда тебе будет удобно получать уведомления:",
+            reply_markup=start_notification_time_keyboard(),
+        )
 
     @router.message(Command("help"))
     async def help_handler(message: Message) -> None:
@@ -1158,7 +1233,7 @@ def build_main_router(container: AppContainer) -> Router:
         await ensure_user(message)
         await message.answer(await get_bot_text("schedule"), reply_markup=user_main_menu())
 
-    @router.message(F.text == "Настройка уведомлений")
+    @router.message(F.text.in_(["Настройки уведомлений", "Настройка уведомлений"]))
     async def notification_settings_handler(message: Message) -> None:
         user, session = await get_user_and_session(message)
         try:
@@ -1200,11 +1275,11 @@ def build_main_router(container: AppContainer) -> Router:
         finally:
             await session.close()
 
-    @router.message(F.text.in_(["Задать вопрос по организации Лиги Лидеров", "Задать вопрос по обучению"]))
+    @router.message(F.text.in_(["Задать вопрос", "Задать вопрос по организации Лиги Лидеров", "Задать вопрос по обучению"]))
     async def ask_training_question_handler(message: Message, state: FSMContext) -> None:
         await ensure_user(message)
-        await state.set_state(UserFlow.waiting_for_training_question)
-        await message.answer("Напиши свой организационный вопрос по программе.")
+        await state.clear()
+        await message.answer("Выбери раздел по своему вопросу:", reply_markup=question_section_keyboard())
 
     @router.message(F.text == "Материалы программы")
     async def materials_handler(message: Message) -> None:
@@ -1357,6 +1432,28 @@ def build_main_router(container: AppContainer) -> Router:
             await state.clear()
             return
         await answer_question(message, message.text, state, mode="training_qa")
+        await state.clear()
+
+    @router.message(UserFlow.waiting_for_categorized_question, F.text)
+    async def categorized_question_input_handler(message: Message, state: FSMContext) -> None:
+        data = await state.get_data()
+        section = data.get("question_section")
+        material_question = parse_material_question(message.text)
+        if material_question is not None:
+            document_id, question = material_question
+            await answer_material_question(message, document_id, question, state)
+            await state.clear()
+            return
+
+        mode, extra_context, force_rag = question_section_context(section)
+        await answer_question(
+            message,
+            message.text,
+            state,
+            mode=mode,
+            force_rag=force_rag,
+            extra_context=extra_context,
+        )
         await state.clear()
 
     @router.message(UserFlow.waiting_for_project_help_question, F.text)

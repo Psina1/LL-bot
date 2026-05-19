@@ -3,6 +3,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 class UserFlow(StatesGroup):
     waiting_for_training_question = State()
+    waiting_for_categorized_question = State()
     waiting_for_project_context = State()
     waiting_for_user_file = State()
     waiting_for_file_question = State()
