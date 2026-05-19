@@ -229,6 +229,31 @@ def build_main_router(container: AppContainer) -> Router:
             True,
         )
 
+    def looks_like_technical_question(text_value: str | None) -> bool:
+        text = (text_value or "").lower()
+        direct_markers = [
+            "не могу зайти",
+            "не получается зайти",
+            "не зайти",
+            "не открывается",
+            "не открыва",
+            "ошибка",
+            "логин",
+            "пароль",
+            "доступ",
+            "платформ",
+            "прогресс",
+            "запис",
+            "видео",
+            "ссылка",
+            "прикреп",
+            "прилож",
+        ]
+        if any(marker in text for marker in direct_markers):
+            return True
+        homework_action = any(marker in text for marker in ["сдать", "отправить", "загрузить", "прикрепить", "приложить"])
+        return homework_action and any(marker in text for marker in ["дз", "домаш", "задани"])
+
     async def get_bot_text(key: str) -> str:
         async with SessionLocal() as session:
             return await BotTextRepository.get_value(session, key, BOT_TEXT_DEFAULTS[key])
@@ -1445,6 +1470,9 @@ def build_main_router(container: AppContainer) -> Router:
             await state.clear()
             return
 
+        if section != "technical" and looks_like_technical_question(message.text):
+            section = "technical"
+
         mode, extra_context, force_rag = question_section_context(section)
         await answer_question(
             message,
@@ -1632,6 +1660,17 @@ def build_main_router(container: AppContainer) -> Router:
         if material_question is not None:
             document_id, question = material_question
             await answer_material_question(message, document_id, question, state)
+            return
+        if looks_like_technical_question(message.text):
+            mode, extra_context, force_rag = question_section_context("technical")
+            await answer_question(
+                message,
+                message.text,
+                state,
+                mode=mode,
+                force_rag=force_rag,
+                extra_context=extra_context,
+            )
             return
         # Вертикальный срез: любой текстовый вопрос -> LLM -> ответ -> лог в БД.
         await answer_question(message, message.text, state, mode="free_text")
