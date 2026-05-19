@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,6 +24,13 @@ class ChatAnswer:
 
 
 class ChatService:
+    CONTACTS_RULE = (
+        "Если в контексте есть контакты человека, email, Telegram или телефон, обязательно укажи их прямо в ответе. "
+        "Не пиши обобщённо «по почте или в Telegram», если рядом есть конкретный адрес или ник. "
+        "Если контакт в тексте разбит пробелами, восстанови его в нормальный вид: "
+        "`name @ domain . ru` -> `name@domain.ru`, `@ Name` -> `@Name`."
+    )
+
     def __init__(self, settings: Settings, llm_client: LLMClient, rag_service: RAGService) -> None:
         self.settings = settings
         self.llm_client = llm_client
@@ -78,13 +86,25 @@ class ChatService:
             )
             return ChatAnswer(text=answer_text, sources=[], token_usage=None, mode=mode, message_id=message.id)
 
-        if context_text:
+        if mode == "technical_question":
+            user_prompt = (
+                f"Вопрос пользователя:\n{question}\n\n"
+                f"Служебный контекст:\n{extra_context or 'Нет'}\n\n"
+                "Это технический вопрос, а не вопрос по материалам обучения.\n"
+                "Ответь без разделов «Коротко», «Подробнее», «Что можно применить» и «Источники».\n"
+                "Дай 1-3 коротких предложения человеческим языком. "
+                "Если вопрос про доступы, платформу ПРОГРЕСС, записи занятий, загрузку домашних заданий "
+                "или техническую ошибку, направь пользователя к Илье в Telegram: @reptiloid0."
+            )
+        elif context_text:
             user_prompt = (
                 f"Вопрос пользователя:\n{question}\n\n"
                 f"Контекст по материалам:\n{context_text}\n\n"
                 f"Дополнительный контекст раздела:\n{extra_context or 'Нет'}\n\n"
                 f"Описание проекта пользователя:\n{user_context_block}\n\n"
-                "Сформируй ответ строго в формате: Коротко / Подробнее / Что можно применить / Источники."
+                f"{self.CONTACTS_RULE}\n"
+                "Сформируй ответ в формате: Коротко / Подробнее / Что можно применить. "
+                "Не добавляй блок «Источники» и не перечисляй фрагменты: источники сохраняются системой отдельно."
             )
         else:
             user_prompt = (
@@ -93,7 +113,8 @@ class ChatService:
                 "Контекст по материалам: отсутствует.\n"
                 f"Описание проекта пользователя:\n{user_context_block}\n\n"
                 "Если служебный контекст отвечает на вопрос, используй его. "
-                "Если ответа нет, прямо скажи, что точного ответа в загруженных материалах нет."
+                "Если ответа нет, прямо скажи, что точного ответа в загруженных материалах нет. "
+                "Не добавляй блок «Источники»."
             )
 
         result = await self.llm_client.chat_completion(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt)
@@ -148,7 +169,9 @@ class ChatService:
             f"Описание проекта пользователя:\n{user_context_block}\n\n"
             "Ответь только на основе выбранного материала. "
             "Если в этом материале нет ответа, прямо скажи, что точного ответа в выбранном файле нет. "
-            "Сформируй ответ строго в формате: Коротко / Подробнее / Что можно применить / Источники."
+            f"{self.CONTACTS_RULE}\n"
+            "Сформируй ответ в формате: Коротко / Подробнее / Что можно применить. "
+            "Не добавляй блок «Источники» и не перечисляй фрагменты: источники сохраняются системой отдельно."
         )
 
         result = await self.llm_client.chat_completion(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt)
@@ -191,28 +214,15 @@ class ChatService:
 
     @staticmethod
     def _ensure_sources_block(answer: str, sources: list[dict[str, Any]]) -> str:
+        # Keep sources in the DB, but do not expose raw chunk/file metadata in the chat UX.
+        return ChatService._strip_sources_block(answer)
+
+    @staticmethod
+    def _strip_sources_block(answer: str) -> str:
         normalized = answer.strip()
-        if not sources and "Источники" in normalized:
-            return normalized
-
-        if not sources:
-            return (
-                f"{normalized}\n\n"
-                "Источники: точных источников в загруженных материалах не найдено."
-            )
-
-        lines = ["Проверенные источники:" if "Источники" in normalized else "Источники:"]
-        for source in sources:
-            module_number = source.get("module_number")
-            module_title = source.get("module_title")
-            doc_title = source.get("document_title")
-            filename = source.get("original_filename")
-            chunk_index = source.get("chunk_index")
-            if module_number:
-                prefix = f"Модуль {module_number}"
-                if module_title:
-                    prefix += f": {module_title}"
-            else:
-                prefix = doc_title or "Материал"
-            lines.append(f"- {prefix}, файл: {filename}, фрагмент: {chunk_index}")
-        return f"{normalized}\n\n" + "\n".join(lines)
+        normalized = re.sub(
+            r"(?ims)\n*\s*(?:\*\*)?\s*(?:Проверенные источники|Источники)\s*(?:\*\*)?\s*[:：].*\Z",
+            "",
+            normalized,
+        )
+        return normalized.strip()
