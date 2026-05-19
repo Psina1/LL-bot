@@ -18,6 +18,7 @@ from app.db.models import (
     Message,
     MessageFeedback,
     NotificationDelivery,
+    ProgramMedia,
     RoleEnum,
     User,
     UserFile,
@@ -587,6 +588,57 @@ class UserFileRepository:
         await session.commit()
         await session.refresh(user_file)
         return user_file
+
+
+class ProgramMediaRepository:
+    @staticmethod
+    async def create(
+        session: AsyncSession,
+        title: str,
+        media_type: str,
+        telegram_file_id: str,
+        telegram_kind: str,
+        created_by_user_id: int | None,
+        telegram_file_unique_id: str | None = None,
+        original_filename: str | None = None,
+        file_size: int | None = None,
+        mime_type: str | None = None,
+        module_number: int | None = None,
+        module_title: str | None = None,
+    ) -> ProgramMedia:
+        media = ProgramMedia(
+            title=title,
+            media_type=media_type,
+            telegram_file_id=telegram_file_id,
+            telegram_file_unique_id=telegram_file_unique_id,
+            telegram_kind=telegram_kind,
+            original_filename=original_filename,
+            file_size=file_size,
+            mime_type=mime_type,
+            module_number=module_number,
+            module_title=module_title,
+            created_by_user_id=created_by_user_id,
+        )
+        session.add(media)
+        await session.commit()
+        await session.refresh(media)
+        return media
+
+    @staticmethod
+    async def list_by_type(session: AsyncSession, media_type: str, limit: int = 20) -> list[ProgramMedia]:
+        stmt = (
+            select(ProgramMedia)
+            .where(ProgramMedia.media_type == media_type)
+            .order_by(ProgramMedia.module_number.asc().nulls_last(), ProgramMedia.created_at.desc())
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def list_latest(session: AsyncSession, limit: int = 50) -> list[ProgramMedia]:
+        result = await session.execute(select(ProgramMedia).order_by(ProgramMedia.created_at.desc()).limit(limit))
+        return list(result.scalars().all())
 
 
 class StatsRepository:

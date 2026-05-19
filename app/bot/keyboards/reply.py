@@ -63,7 +63,7 @@ ADMIN_MENU_BUTTONS = [
     [KeyboardButton(text="Админ: загрузить материал"), KeyboardButton(text="Админ: материалы")],
     [KeyboardButton(text="Админ: тексты"), KeyboardButton(text="Админ: статистика")],
     [KeyboardButton(text="Админ: напоминание"), KeyboardButton(text="Админ: загрузить ICS")],
-    [KeyboardButton(text="Админ: расходы")],
+    [KeyboardButton(text="Админ: загрузить медиа"), KeyboardButton(text="Админ: расходы")],
     [KeyboardButton(text="Главное меню")],
 ]
 
@@ -98,6 +98,19 @@ ADMIN_MATERIAL_TYPE_BUTTONS = [
     [KeyboardButton(text="Тип: саммари")],
     [KeyboardButton(text="Тип: расписание")],
     [KeyboardButton(text="Тип: другое")],
+    [KeyboardButton(text="Админ: меню")],
+]
+
+ADMIN_MEDIA_TYPE_BUTTONS = [
+    [KeyboardButton(text="Медиа: видео")],
+    [KeyboardButton(text="Медиа: подкаст")],
+    [KeyboardButton(text="Админ: меню")],
+]
+
+ADMIN_MEDIA_MODULE_BUTTONS = [
+    [KeyboardButton(text="Медиа: модуль 1"), KeyboardButton(text="Медиа: модуль 2")],
+    [KeyboardButton(text="Медиа: модуль 3"), KeyboardButton(text="Медиа: модуль 4")],
+    [KeyboardButton(text="Медиа: без модуля")],
     [KeyboardButton(text="Админ: меню")],
 ]
 
@@ -156,6 +169,14 @@ def admin_material_type_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=ADMIN_MATERIAL_TYPE_BUTTONS, resize_keyboard=True)
 
 
+def admin_media_type_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=ADMIN_MEDIA_TYPE_BUTTONS, resize_keyboard=True)
+
+
+def admin_media_module_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=ADMIN_MEDIA_MODULE_BUTTONS, resize_keyboard=True)
+
+
 def feedback_keyboard(message_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -173,6 +194,17 @@ def question_section_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Вопрос по программе", callback_data="question_section:program")],
             [InlineKeyboardButton(text="Технический вопрос", callback_data="question_section:technical")],
             [InlineKeyboardButton(text="Другое", callback_data="question_section:other")],
+            [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
+        ]
+    )
+
+
+def materials_program_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Записи и материалы занятий", callback_data="materials:records")],
+            [InlineKeyboardButton(text="Подкасты на основе занятий", callback_data="materials:podcasts")],
+            [InlineKeyboardButton(text="Саммари занятий", callback_data="materials:summary")],
             [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
         ]
     )

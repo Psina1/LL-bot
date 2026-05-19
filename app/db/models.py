@@ -209,6 +209,29 @@ class BotText(Base):
     )
 
 
+class ProgramMedia(Base):
+    __tablename__ = "program_media"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(500))
+    media_type: Mapped[str] = mapped_column(String(50), index=True)
+    telegram_file_id: Mapped[str] = mapped_column(String(512))
+    telegram_file_unique_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    telegram_kind: Mapped[str] = mapped_column(String(50))
+    original_filename: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    module_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    module_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_program_media_type_created_at", "media_type", "created_at"),
+        Index("ix_program_media_module_number", "module_number"),
+    )
+
+
 class AppSetting(Base):
     __tablename__ = "app_settings"
 

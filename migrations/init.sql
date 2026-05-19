@@ -109,6 +109,22 @@ CREATE TABLE IF NOT EXISTS app_settings (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS program_media (
+    id SERIAL PRIMARY KEY,
+    title VARCHAR(500) NOT NULL,
+    media_type VARCHAR(50) NOT NULL,
+    telegram_file_id VARCHAR(512) NOT NULL,
+    telegram_file_unique_id VARCHAR(512),
+    telegram_kind VARCHAR(50) NOT NULL,
+    original_filename VARCHAR(500),
+    file_size BIGINT,
+    mime_type VARCHAR(255),
+    module_number INTEGER,
+    module_title VARCHAR(255),
+    created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS errors (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -126,4 +142,6 @@ CREATE INDEX IF NOT EXISTS ix_user_notification_settings_user_id ON user_notific
 CREATE INDEX IF NOT EXISTS ix_notification_deliveries_user_id ON notification_deliveries(user_id);
 CREATE INDEX IF NOT EXISTS ix_user_files_user_id ON user_files(user_id);
 CREATE INDEX IF NOT EXISTS ix_user_files_document_id ON user_files(document_id);
+CREATE INDEX IF NOT EXISTS ix_program_media_type_created_at ON program_media(media_type, created_at);
+CREATE INDEX IF NOT EXISTS ix_program_media_module_number ON program_media(module_number);
 CREATE INDEX IF NOT EXISTS ix_errors_created_at ON errors(created_at DESC);

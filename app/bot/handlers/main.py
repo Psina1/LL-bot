@@ -19,6 +19,8 @@ from app.bot.keyboards.reply import (
     admin_material_module_keyboard,
     admin_material_season_keyboard,
     admin_material_type_keyboard,
+    admin_media_module_keyboard,
+    admin_media_type_keyboard,
     admin_menu_keyboard,
     admin_text_preview_keyboard,
     admin_texts_keyboard,
@@ -26,6 +28,7 @@ from app.bot.keyboards.reply import (
     feedback_reason_keyboard,
     homework_menu_keyboard,
     main_menu_keyboard,
+    materials_program_keyboard,
     materials_season_keyboard,
     materials_type_keyboard,
     notification_settings_keyboard,
@@ -59,6 +62,7 @@ from app.db.repositories import (
     ErrorRepository,
     MessageFeedbackRepository,
     MessageRepository,
+    ProgramMediaRepository,
     UserNotificationSettingRepository,
     StatsRepository,
     UserRepository,
@@ -168,26 +172,30 @@ def build_main_router(container: AppContainer) -> Router:
     def materials_menu_keyboard():
         return materials_type_keyboard(video_enabled=container.settings.video_library_enabled)
 
-    async def ensure_user(message: Message):
+    async def upsert_telegram_user(telegram_user):
         async with SessionLocal() as session:
             return await UserRepository.upsert_telegram_user(
                 session=session,
-                telegram_id=message.from_user.id,
-                username=message.from_user.username,
-                first_name=message.from_user.first_name,
-                last_name=message.from_user.last_name,
-                is_admin=message.from_user.id in container.settings.admin_ids,
+                telegram_id=telegram_user.id,
+                username=telegram_user.username,
+                first_name=telegram_user.first_name,
+                last_name=telegram_user.last_name,
+                is_admin=telegram_user.id in container.settings.admin_ids,
             )
 
-    async def get_user_and_session(message: Message):
+    async def ensure_user(message: Message):
+        return await upsert_telegram_user(message.from_user)
+
+    async def get_user_and_session(message: Message, telegram_user=None):
+        actor = telegram_user or message.from_user
         session = SessionLocal()
         user = await UserRepository.upsert_telegram_user(
             session=session,
-            telegram_id=message.from_user.id,
-            username=message.from_user.username,
-            first_name=message.from_user.first_name,
-            last_name=message.from_user.last_name,
-            is_admin=message.from_user.id in container.settings.admin_ids,
+            telegram_id=actor.id,
+            username=actor.username,
+            first_name=actor.first_name,
+            last_name=actor.last_name,
+            is_admin=actor.id in container.settings.admin_ids,
         )
         return user, session
 
@@ -254,6 +262,60 @@ def build_main_router(container: AppContainer) -> Router:
         homework_action = any(marker in text for marker in ["сдать", "отправить", "загрузить", "прикрепить", "приложить"])
         return homework_action and any(marker in text for marker in ["дз", "домаш", "задани"])
 
+    def extract_media_payload(message: Message) -> dict[str, Any] | None:
+        media = None
+        telegram_kind = ""
+        original_filename = None
+        mime_type = None
+        title_hint = None
+
+        if message.video:
+            media = message.video
+            telegram_kind = "video"
+            title_hint = "Видео занятия"
+        elif message.audio:
+            media = message.audio
+            telegram_kind = "audio"
+            original_filename = message.audio.file_name
+            mime_type = message.audio.mime_type
+            title_hint = message.audio.title or message.audio.file_name or "Подкаст"
+        elif message.voice:
+            media = message.voice
+            telegram_kind = "voice"
+            mime_type = message.voice.mime_type
+            title_hint = "Голосовой подкаст"
+        elif message.document:
+            media = message.document
+            telegram_kind = "document"
+            original_filename = message.document.file_name
+            mime_type = message.document.mime_type
+            title_hint = message.document.file_name or "Медиафайл"
+
+        if media is None:
+            return None
+
+        caption_title = (message.caption or "").strip().splitlines()[0].strip() if message.caption else ""
+        title = caption_title or (Path(title_hint).stem if title_hint else "Медиафайл")
+        return {
+            "title": title[:500],
+            "telegram_kind": telegram_kind,
+            "telegram_file_id": media.file_id,
+            "telegram_file_unique_id": getattr(media, "file_unique_id", None),
+            "original_filename": original_filename,
+            "file_size": getattr(media, "file_size", None),
+            "mime_type": mime_type,
+        }
+
+    def media_payload_matches_type(payload: dict[str, Any], media_type: str) -> bool:
+        kind = payload["telegram_kind"]
+        mime_type = (payload.get("mime_type") or "").lower()
+        filename = (payload.get("original_filename") or "").lower()
+        if media_type == "video":
+            return kind == "video" or mime_type.startswith("video/") or filename.endswith((".mp4", ".mov", ".m4v"))
+        if media_type == "podcast":
+            return kind in {"audio", "voice"} or mime_type.startswith("audio/") or filename.endswith((".mp3", ".m4a", ".wav", ".ogg"))
+        return False
+
     async def get_bot_text(key: str) -> str:
         async with SessionLocal() as session:
             return await BotTextRepository.get_value(session, key, BOT_TEXT_DEFAULTS[key])
@@ -317,8 +379,9 @@ def build_main_router(container: AppContainer) -> Router:
         mode: str = "training_qa",
         force_rag: bool = True,
         extra_context: str | None = None,
+        telegram_user=None,
     ) -> None:
-        user, session = await get_user_and_session(message)
+        user, session = await get_user_and_session(message, telegram_user=telegram_user)
         user_id = user.id
         thinking_message: Message | None = None
         try:
@@ -392,8 +455,8 @@ def build_main_router(container: AppContainer) -> Router:
             await _delete_message_safely(thinking_message)
             await session.close()
 
-    async def send_materials_list(message: Message) -> None:
-        user, session = await get_user_and_session(message)
+    async def send_materials_list(message: Message, telegram_user=None) -> None:
+        user, session = await get_user_and_session(message, telegram_user=telegram_user)
         try:
             docs = await DocumentRepository.list_visible_materials(session, user.id, limit=50)
         finally:
@@ -424,6 +487,55 @@ def build_main_router(container: AppContainer) -> Router:
             ]
         )
         await message.answer("\n".join(lines), reply_markup=user_main_menu())
+
+    def media_caption(media) -> str:
+        module_text = f"Модуль {media.module_number}" if media.module_number else "Без модуля"
+        return f"{media.title}\n{module_text}"
+
+    async def send_media_asset(message: Message, media) -> None:
+        caption = media_caption(media)
+        try:
+            if media.telegram_kind == "video":
+                await message.answer_video(video=media.telegram_file_id, caption=caption, parse_mode=None)
+                return
+            if media.telegram_kind == "audio":
+                await message.answer_audio(audio=media.telegram_file_id, caption=caption, parse_mode=None)
+                return
+            if media.telegram_kind == "voice":
+                await message.answer_voice(voice=media.telegram_file_id, caption=caption, parse_mode=None)
+                return
+            await message.answer_document(document=media.telegram_file_id, caption=caption, parse_mode=None)
+        except TelegramBadRequest:
+            logger.exception("send_media_asset_failed")
+            await message.answer(
+                f"Не получилось отправить файл «{media.title}». "
+                "Возможно, Telegram больше не принимает этот file_id. Админу нужно загрузить файл заново."
+            )
+
+    async def send_program_media(message: Message, media_type: str, title: str, show_menu_after: bool = True) -> bool:
+        async with SessionLocal() as session:
+            media_items = await ProgramMediaRepository.list_by_type(session, media_type=media_type, limit=10)
+
+        if not media_items:
+            return False
+
+        await message.answer(title)
+        for media in media_items:
+            await send_media_asset(message, media)
+        if show_menu_after:
+            await message.answer("Если хочешь продолжить, выбери действие:", reply_markup=user_main_menu())
+        return True
+
+    async def send_records_and_materials(message: Message, telegram_user=None) -> None:
+        has_video = await send_program_media(
+            message,
+            media_type="video",
+            title="Записи занятий:",
+            show_menu_after=False,
+        )
+        if not has_video:
+            await message.answer("Видео записей пока не загружены.")
+        await send_materials_list(message, telegram_user=telegram_user)
 
     async def send_homework_list(message: Message) -> None:
         async with SessionLocal() as session:
@@ -801,6 +913,7 @@ def build_main_router(container: AppContainer) -> Router:
             "Админ: статистика",
             "Админ: напоминание",
             "Админ: загрузить ICS",
+            "Админ: загрузить медиа",
             "Админ: расходы",
             "Главное меню",
         }
@@ -892,6 +1005,124 @@ def build_main_router(container: AppContainer) -> Router:
     async def admin_material_type_invalid_handler(message: Message) -> None:
         await message.answer("Выбери тип материала кнопкой ниже или нажми «Админ: меню».", reply_markup=admin_material_type_keyboard())
 
+    @router.message(F.text == "Админ: загрузить медиа")
+    async def admin_media_upload_start_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            return
+        await state.set_state(AdminFlow.waiting_for_media_type)
+        await message.answer(
+            "Запускаю мастер загрузки медиа.\n\n"
+            "Шаг 1 из 3: выбери тип файла.",
+            reply_markup=admin_media_type_keyboard(),
+        )
+
+    @router.message(AdminFlow.waiting_for_media_type, F.text.in_(["Медиа: видео", "Медиа: подкаст"]))
+    async def admin_media_type_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        media_type = "video" if message.text == "Медиа: видео" else "podcast"
+        await state.update_data(media_type=media_type)
+        await state.set_state(AdminFlow.waiting_for_media_module)
+        await message.answer("Шаг 2 из 3: выбери модуль.", reply_markup=admin_media_module_keyboard())
+
+    @router.message(AdminFlow.waiting_for_media_type)
+    async def admin_media_type_invalid_handler(message: Message) -> None:
+        await message.answer("Выбери тип медиа кнопкой ниже или нажми «Админ: меню».", reply_markup=admin_media_type_keyboard())
+
+    @router.message(AdminFlow.waiting_for_media_module, F.text.startswith("Медиа: "))
+    async def admin_media_module_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        module_number = None
+        module_match = re.search(r"модуль\s+(\d+)", message.text, flags=re.IGNORECASE)
+        if module_match:
+            module_number = int(module_match.group(1))
+        await state.update_data(media_module_number=module_number)
+        await state.set_state(AdminFlow.waiting_for_media_file)
+
+        data = await state.get_data()
+        media_type = data.get("media_type")
+        type_text = "видео" if media_type == "video" else "аудиоподкаст"
+        module_text = f"модуль {module_number}" if module_number else "без модуля"
+        await message.answer(
+            "Шаг 3 из 3: пришли файл в Telegram.\n\n"
+            f"- тип: {type_text}\n"
+            f"- модуль: {module_text}\n\n"
+            "Название можно написать в подписи к файлу. Если подписи нет, возьму имя файла.",
+            reply_markup=admin_menu_keyboard(),
+        )
+
+    @router.message(AdminFlow.waiting_for_media_module)
+    async def admin_media_module_invalid_handler(message: Message) -> None:
+        await message.answer("Выбери модуль кнопкой ниже или нажми «Админ: меню».", reply_markup=admin_media_module_keyboard())
+
+    @router.message(AdminFlow.waiting_for_media_file)
+    async def admin_media_file_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        if message.text == "Главное меню":
+            await state.clear()
+            await message.answer("Загрузка медиа отменена. Вернул в главное меню.", reply_markup=user_main_menu())
+            return
+        if message.text and message.text.startswith("Админ:"):
+            await state.clear()
+            await message.answer(
+                "Загрузка медиа отменена. Если нужна другая админская команда, нажми её ещё раз.",
+                reply_markup=admin_menu_keyboard(),
+            )
+            return
+
+        payload = extract_media_payload(message)
+        if payload is None:
+            await message.answer("Пришли видео, аудио или файл-документ.", reply_markup=admin_menu_keyboard())
+            return
+
+        state_data = await state.get_data()
+        media_type = state_data.get("media_type")
+        module_number = state_data.get("media_module_number")
+        if media_type not in {"video", "podcast"}:
+            await message.answer("Не понял тип медиа. Начни заново через «Админ: загрузить медиа».", reply_markup=admin_menu_keyboard())
+            await state.clear()
+            return
+
+        if not media_payload_matches_type(payload, media_type):
+            expected = "видео" if media_type == "video" else "аудиофайл"
+            await message.answer(f"Ожидал {expected}. Пришли правильный файл или начни заново.", reply_markup=admin_menu_keyboard())
+            return
+
+        user = await ensure_user(message)
+        async with SessionLocal() as session:
+            media = await ProgramMediaRepository.create(
+                session=session,
+                title=payload["title"],
+                media_type=media_type,
+                telegram_file_id=payload["telegram_file_id"],
+                telegram_file_unique_id=payload["telegram_file_unique_id"],
+                telegram_kind=payload["telegram_kind"],
+                original_filename=payload["original_filename"],
+                file_size=payload["file_size"],
+                mime_type=payload["mime_type"],
+                module_number=module_number,
+                module_title=f"Модуль {module_number}" if module_number else None,
+                created_by_user_id=user.id,
+            )
+
+        type_text = "видео" if media_type == "video" else "подкаст"
+        module_text = f"модуль {module_number}" if module_number else "без модуля"
+        await message.answer(
+            "Медиафайл сохранён.\n\n"
+            f"- id: {media.id}\n"
+            f"- тип: {type_text}\n"
+            f"- название: {media.title}\n"
+            f"- модуль: {module_text}\n\n"
+            "Теперь он будет доступен в разделе «Материалы программы».",
+            reply_markup=admin_menu_keyboard(),
+        )
+        await state.clear()
+
     @router.message(Command("list_materials"))
     @router.message(F.text == "Админ: материалы")
     async def list_materials_handler(message: Message) -> None:
@@ -899,16 +1130,24 @@ def build_main_router(container: AppContainer) -> Router:
             return
         async with SessionLocal() as session:
             docs = await DocumentRepository.list_materials(session, limit=100)
-        if not docs:
-            await message.answer("Материалы пока не загружены.")
+            media_items = await ProgramMediaRepository.list_latest(session, limit=30)
+        if not docs and not media_items:
+            await message.answer("Материалы и медиа пока не загружены.")
             return
 
         lines = ["Последние материалы:"]
-        for doc in docs[:30]:
-            lines.append(
-                f"- id={doc.id} | {doc.title} | visibility={doc.visibility.value} | "
-                f"module={doc.module_number} | status={doc.status.value}"
-            )
+        if docs:
+            for doc in docs[:30]:
+                lines.append(
+                    f"- doc id={doc.id} | {doc.title} | visibility={doc.visibility.value} | "
+                    f"module={doc.module_number} | status={doc.status.value}"
+                )
+        if media_items:
+            lines.append("")
+            lines.append("Последние медиа:")
+            for media in media_items[:20]:
+                module_text = f"module={media.module_number}" if media.module_number else "module=none"
+                lines.append(f"- media id={media.id} | {media.title} | type={media.media_type} | {module_text}")
         await message.answer("\n".join(lines))
 
     @router.message(Command("reindex"))
@@ -1309,7 +1548,52 @@ def build_main_router(container: AppContainer) -> Router:
     @router.message(F.text == "Материалы программы")
     async def materials_handler(message: Message) -> None:
         await ensure_user(message)
-        await message.answer(MATERIALS_SEASON_PROMPT, reply_markup=materials_season_keyboard())
+        await message.answer("Выбери раздел материалов программы:", reply_markup=materials_program_keyboard())
+
+    @router.callback_query(F.data == "materials:records")
+    async def materials_records_callback_handler(callback: CallbackQuery) -> None:
+        await upsert_telegram_user(callback.from_user)
+        await callback.answer()
+        if callback.message:
+            await send_records_and_materials(callback.message, telegram_user=callback.from_user)
+
+    @router.callback_query(F.data == "materials:podcasts")
+    async def materials_podcasts_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
+        await upsert_telegram_user(callback.from_user)
+        await callback.answer()
+        if not callback.message:
+            return
+        has_podcast = await send_program_media(callback.message, media_type="podcast", title="Подкасты на основе занятий:")
+        if has_podcast:
+            return
+        await callback.message.answer(
+            "Аудиоподкасты пока не загружены. Пока могу сделать текстовую подкаст-выжимку по материалам."
+        )
+        await answer_question(
+            callback.message,
+            "Сделай короткий текстовый подкаст-конспект по материалам занятий сезона 1. "
+            "Формат: 5 ключевых мыслей, практический вывод, что попробовать на работе.",
+            state,
+            mode="materials_podcast_summary",
+            telegram_user=callback.from_user,
+        )
+        await state.clear()
+
+    @router.callback_query(F.data == "materials:summary")
+    async def materials_summary_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
+        await upsert_telegram_user(callback.from_user)
+        await callback.answer()
+        if not callback.message:
+            return
+        await answer_question(
+            callback.message,
+            "Сделай краткое саммари занятий сезона 1 по загруженным материалам. "
+            "Выдели основные темы, инструменты и что участнику можно применить в проекте.",
+            state,
+            mode="materials_summary",
+            telegram_user=callback.from_user,
+        )
+        await state.clear()
 
     @router.message(F.text == "Сезон 1. Бизнес-консалтинг")
     async def materials_season_handler(message: Message) -> None:
@@ -1319,7 +1603,7 @@ def build_main_router(container: AppContainer) -> Router:
     @router.message(F.text == "Записи и материалы занятий")
     async def materials_records_handler(message: Message) -> None:
         await ensure_user(message)
-        await send_materials_list(message)
+        await send_records_and_materials(message)
 
     @router.message(F.text == "Видео занятий")
     async def materials_video_handler(message: Message) -> None:
@@ -1346,6 +1630,9 @@ def build_main_router(container: AppContainer) -> Router:
     @router.message(F.text == "Подкасты на основе занятий")
     async def materials_podcasts_handler(message: Message, state: FSMContext) -> None:
         await ensure_user(message)
+        has_podcast = await send_program_media(message, media_type="podcast", title="Подкасты на основе занятий:")
+        if has_podcast:
+            return
         await message.answer(PODCASTS_PROMPT)
         await answer_question(
             message,
