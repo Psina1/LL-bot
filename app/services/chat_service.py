@@ -87,15 +87,21 @@ class ChatService:
             return ChatAnswer(text=answer_text, sources=[], token_usage=None, mode=mode, message_id=message.id)
 
         if mode == "technical_question":
-            user_prompt = (
-                f"Вопрос пользователя:\n{question}\n\n"
-                f"Служебный контекст:\n{extra_context or 'Нет'}\n\n"
-                "Это технический вопрос, а не вопрос по материалам обучения.\n"
-                "Ответь без разделов «Коротко», «Подробнее», «Что можно применить» и «Источники».\n"
-                "Дай 1-3 коротких предложения человеческим языком. "
-                "Если вопрос про доступы, платформу ПРОГРЕСС, записи занятий, загрузку домашних заданий "
-                "или техническую ошибку, направь пользователя к Илье в Telegram: @reptiloid0."
+            answer_text = (
+                "По техническим вопросам лучше сразу написать Илье в Telegram: @reptiloid0.\n\n"
+                "Он поможет с доступом, платформой ПРОГРЕСС, Moodle, записями занятий, загрузкой домашних заданий "
+                "и ошибками в работе бота."
             )
+            message = await MessageRepository.create(
+                session=session,
+                user_id=user_id,
+                mode=mode,
+                question=question,
+                answer=answer_text,
+                sources=[],
+                token_usage=None,
+            )
+            return ChatAnswer(text=answer_text, sources=[], token_usage=None, mode=mode, message_id=message.id)
         elif context_text:
             user_prompt = (
                 f"Вопрос пользователя:\n{question}\n\n"
