@@ -327,7 +327,9 @@ class DocumentRepository:
         owner_user_id: int | None,
         module_number: int | None = None,
         module_title: str | None = None,
+        lesson_key: str | None = None,
         material_type: str | None = None,
+        tags: list[str] | None = None,
         status: DocumentStatusEnum = DocumentStatusEnum.uploaded,
     ) -> Document:
         document = Document(
@@ -339,7 +341,9 @@ class DocumentRepository:
             owner_user_id=owner_user_id,
             module_number=module_number,
             module_title=module_title,
+            lesson_key=lesson_key,
             material_type=material_type,
+            tags=tags or [],
             status=status,
         )
         session.add(document)
@@ -605,6 +609,8 @@ class ProgramMediaRepository:
         mime_type: str | None = None,
         module_number: int | None = None,
         module_title: str | None = None,
+        lesson_key: str | None = None,
+        tags: list[str] | None = None,
     ) -> ProgramMedia:
         media = ProgramMedia(
             title=title,
@@ -617,6 +623,8 @@ class ProgramMediaRepository:
             mime_type=mime_type,
             module_number=module_number,
             module_title=module_title,
+            lesson_key=lesson_key,
+            tags=tags or [],
             created_by_user_id=created_by_user_id,
         )
         session.add(media)

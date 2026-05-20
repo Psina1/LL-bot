@@ -90,7 +90,9 @@ class DocumentService:
         telegram_file_id: str | None = None,
         module_number: int | None = None,
         module_title: str | None = None,
+        lesson_key: str | None = None,
         material_type: str | None = None,
+        tags: list[str] | None = None,
     ) -> Document:
         document = await DocumentRepository.create(
             session=session,
@@ -102,7 +104,9 @@ class DocumentService:
             owner_user_id=owner_user_id,
             module_number=module_number,
             module_title=module_title,
+            lesson_key=lesson_key,
             material_type=material_type,
+            tags=tags,
             status=DocumentStatusEnum.uploaded,
         )
 

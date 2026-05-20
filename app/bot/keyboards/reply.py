@@ -85,9 +85,9 @@ ADMIN_MATERIAL_SEASON_BUTTONS = [
 
 
 ADMIN_MATERIAL_MODULE_BUTTONS = [
-    [KeyboardButton(text="Материал: модуль 1"), KeyboardButton(text="Материал: модуль 2")],
-    [KeyboardButton(text="Материал: модуль 3"), KeyboardButton(text="Материал: модуль 4")],
-    [KeyboardButton(text="Материал: без модуля")],
+    [KeyboardButton(text="Материал: общий материал")],
+    [KeyboardButton(text="Материал: урок/модуль 1"), KeyboardButton(text="Материал: урок/модуль 2")],
+    [KeyboardButton(text="Материал: урок/модуль 3"), KeyboardButton(text="Материал: урок/модуль 4")],
     [KeyboardButton(text="Админ: меню")],
 ]
 
@@ -108,9 +108,9 @@ ADMIN_MEDIA_TYPE_BUTTONS = [
 ]
 
 ADMIN_MEDIA_MODULE_BUTTONS = [
-    [KeyboardButton(text="Медиа: модуль 1"), KeyboardButton(text="Медиа: модуль 2")],
-    [KeyboardButton(text="Медиа: модуль 3"), KeyboardButton(text="Медиа: модуль 4")],
-    [KeyboardButton(text="Медиа: без модуля")],
+    [KeyboardButton(text="Медиа: общий материал")],
+    [KeyboardButton(text="Медиа: урок/модуль 1"), KeyboardButton(text="Медиа: урок/модуль 2")],
+    [KeyboardButton(text="Медиа: урок/модуль 3"), KeyboardButton(text="Медиа: урок/модуль 4")],
     [KeyboardButton(text="Админ: меню")],
 ]
 

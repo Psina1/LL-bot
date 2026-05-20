@@ -318,6 +318,50 @@ def build_main_router(container: AppContainer) -> Router:
             return kind in {"audio", "voice"} or mime_type.startswith("audio/") or filename.endswith((".mp3", ".m4a", ".wav", ".ogg"))
         return False
 
+    def lesson_payload(prefix: str, season_title: str | None, text_value: str) -> dict[str, Any]:
+        text = text_value.lower()
+        if "общий" in text or "без модуля" in text:
+            module_title = f"{season_title}, общий материал" if season_title else "Общий материал программы"
+            return {
+                f"{prefix}_module_number": None,
+                f"{prefix}_module_title": module_title,
+                f"{prefix}_lesson_key": "general",
+            }
+
+        module_match = re.search(r"(?:модуль|урок)\s+(\d+)", text_value, flags=re.IGNORECASE)
+        module_number = int(module_match.group(1)) if module_match else None
+        module_title = None
+        lesson_key = "general"
+        if module_number:
+            module_title = f"{season_title}, урок/модуль {module_number}" if season_title else f"Урок/модуль {module_number}"
+            lesson_key = f"lesson_{module_number}"
+        return {
+            f"{prefix}_module_number": module_number,
+            f"{prefix}_module_title": module_title,
+            f"{prefix}_lesson_key": lesson_key,
+        }
+
+    def build_content_tags(
+        *,
+        lesson_key: str | None,
+        module_number: int | None,
+        season_title: str | None = None,
+        material_type: str | None = None,
+        media_type: str | None = None,
+    ) -> list[str]:
+        tags = ["scope:general"] if lesson_key == "general" or module_number is None else []
+        if season_title:
+            tags.append(f"season:{season_title}")
+        if lesson_key:
+            tags.append(f"lesson_key:{lesson_key}")
+        if module_number:
+            tags.extend([f"lesson:{module_number}", f"module:{module_number}"])
+        if material_type:
+            tags.append(f"type:{material_type}")
+        if media_type:
+            tags.append(f"media:{media_type}")
+        return list(dict.fromkeys(tags))
+
     async def get_bot_text(key: str) -> str:
         async with SessionLocal() as session:
             return await BotTextRepository.get_value(session, key, BOT_TEXT_DEFAULTS[key])
@@ -478,9 +522,10 @@ def build_main_router(container: AppContainer) -> Router:
             "",
         ]
         for doc in docs[:20]:
-            module_hint = f"модуль {doc.module_number}" if doc.module_number else "без модуля"
+            module_hint = f"урок/модуль {doc.module_number}" if doc.module_number else "общий материал"
             type_hint = doc.material_type or "без типа"
-            lines.append(f"- id={doc.id} | {doc.title} | {module_hint} | {type_hint}")
+            lesson_hint = doc.lesson_key or "no-key"
+            lines.append(f"- id={doc.id} | {doc.title} | {module_hint} | {type_hint} | {lesson_hint}")
         lines.extend(
             [
                 "",
@@ -974,7 +1019,11 @@ def build_main_router(container: AppContainer) -> Router:
         season_title = "Сезон 1. Бизнес-консалтинг" if message.text == "Материал: Сезон 1. Бизнес-консалтинг" else None
         await state.update_data(material_season_title=season_title)
         await state.set_state(AdminFlow.waiting_for_material_module)
-        await message.answer("Шаг 2 из 4: выбери модуль.", reply_markup=admin_material_module_keyboard())
+        await message.answer(
+            "Шаг 2 из 4: выбери привязку материала.\n\n"
+            "Это нужно, чтобы бот понимал: файл общий или относится к конкретному уроку/модулю.",
+            reply_markup=admin_material_module_keyboard(),
+        )
 
     @router.message(AdminFlow.waiting_for_material_season)
     async def admin_material_season_invalid_handler(message: Message) -> None:
@@ -985,11 +1034,9 @@ def build_main_router(container: AppContainer) -> Router:
         if not await require_admin(message):
             await state.clear()
             return
-        module_number = None
-        module_match = re.search(r"модуль\s+(\d+)", message.text, flags=re.IGNORECASE)
-        if module_match:
-            module_number = int(module_match.group(1))
-        await state.update_data(material_module_number=module_number)
+        data = await state.get_data()
+        payload = lesson_payload("material", data.get("material_season_title"), message.text)
+        await state.update_data(**payload)
         await state.set_state(AdminFlow.waiting_for_material_type)
         await message.answer("Шаг 3 из 4: выбери тип материала.", reply_markup=admin_material_type_keyboard())
 
@@ -1014,14 +1061,14 @@ def build_main_router(container: AppContainer) -> Router:
         data = await state.get_data()
         season_title = data.get("material_season_title") or "без сезона"
         module_number = data.get("material_module_number")
-        module_text = f"модуль {module_number}" if module_number else "без модуля"
+        module_text = f"урок/модуль {module_number}" if module_number else "общий материал"
         type_text = message.text.replace("Тип: ", "")
         await state.set_state(AdminFlow.waiting_for_global_file)
         await message.answer(
             "Шаг 4 из 4: пришли файл PDF/DOCX/PPTX/TXT.\n\n"
             f"Будет сохранено так:\n"
             f"- сезон: {season_title}\n"
-            f"- модуль: {module_text}\n"
+            f"- привязка: {module_text}\n"
             f"- тип: {type_text}",
             reply_markup=admin_menu_keyboard(),
         )
@@ -1049,7 +1096,11 @@ def build_main_router(container: AppContainer) -> Router:
         media_type = "video" if message.text == "Медиа: видео" else "podcast"
         await state.update_data(media_type=media_type)
         await state.set_state(AdminFlow.waiting_for_media_module)
-        await message.answer("Шаг 2 из 3: выбери модуль.", reply_markup=admin_media_module_keyboard())
+        await message.answer(
+            "Шаг 2 из 3: выбери привязку медиа.\n\n"
+            "Это нужно, чтобы видео или подкаст относились к конкретному уроку/модулю либо были общими.",
+            reply_markup=admin_media_module_keyboard(),
+        )
 
     @router.message(AdminFlow.waiting_for_media_type)
     async def admin_media_type_invalid_handler(message: Message) -> None:
@@ -1060,21 +1111,19 @@ def build_main_router(container: AppContainer) -> Router:
         if not await require_admin(message):
             await state.clear()
             return
-        module_number = None
-        module_match = re.search(r"модуль\s+(\d+)", message.text, flags=re.IGNORECASE)
-        if module_match:
-            module_number = int(module_match.group(1))
-        await state.update_data(media_module_number=module_number)
+        payload = lesson_payload("media", "Сезон 1. Бизнес-консалтинг", message.text)
+        await state.update_data(**payload)
         await state.set_state(AdminFlow.waiting_for_media_file)
 
         data = await state.get_data()
         media_type = data.get("media_type")
+        module_number = payload.get("media_module_number")
         type_text = "видео" if media_type == "video" else "аудиоподкаст"
-        module_text = f"модуль {module_number}" if module_number else "без модуля"
+        module_text = f"урок/модуль {module_number}" if module_number else "общий материал"
         await message.answer(
             "Шаг 3 из 3: пришли файл в Telegram.\n\n"
             f"- тип: {type_text}\n"
-            f"- модуль: {module_text}\n\n"
+            f"- привязка: {module_text}\n\n"
             "Название можно написать в подписи к файлу. Если подписи нет, возьму имя файла.",
             reply_markup=admin_menu_keyboard(),
         )
@@ -1108,6 +1157,8 @@ def build_main_router(container: AppContainer) -> Router:
         state_data = await state.get_data()
         media_type = state_data.get("media_type")
         module_number = state_data.get("media_module_number")
+        module_title = state_data.get("media_module_title")
+        lesson_key = state_data.get("media_lesson_key")
         if media_type not in {"video", "podcast"}:
             await message.answer("Не понял тип медиа. Начни заново через «Админ: загрузить медиа».", reply_markup=admin_menu_keyboard())
             await state.clear()
@@ -1119,6 +1170,12 @@ def build_main_router(container: AppContainer) -> Router:
             return
 
         user = await ensure_user(message)
+        tags = build_content_tags(
+            lesson_key=lesson_key,
+            module_number=module_number,
+            season_title="Сезон 1. Бизнес-консалтинг",
+            media_type=media_type,
+        )
         async with SessionLocal() as session:
             media = await ProgramMediaRepository.create(
                 session=session,
@@ -1131,18 +1188,21 @@ def build_main_router(container: AppContainer) -> Router:
                 file_size=payload["file_size"],
                 mime_type=payload["mime_type"],
                 module_number=module_number,
-                module_title=f"Модуль {module_number}" if module_number else None,
+                module_title=module_title,
+                lesson_key=lesson_key,
+                tags=tags,
                 created_by_user_id=user.id,
             )
 
         type_text = "видео" if media_type == "video" else "подкаст"
-        module_text = f"модуль {module_number}" if module_number else "без модуля"
+        module_text = f"урок/модуль {module_number}" if module_number else "общий материал"
         await message.answer(
             "Медиафайл сохранён.\n\n"
             f"- id: {media.id}\n"
             f"- тип: {type_text}\n"
             f"- название: {media.title}\n"
-            f"- модуль: {module_text}\n\n"
+            f"- привязка: {module_text}\n"
+            f"- теги: {', '.join(tags)}\n\n"
             "Теперь он будет доступен в разделе «Материалы программы».",
             reply_markup=admin_menu_keyboard(),
         )
@@ -1163,16 +1223,17 @@ def build_main_router(container: AppContainer) -> Router:
         lines = ["Последние материалы:"]
         if docs:
             for doc in docs[:30]:
+                lesson_text = doc.lesson_key or "no-key"
                 lines.append(
                     f"- doc id={doc.id} | {doc.title} | visibility={doc.visibility.value} | "
-                    f"module={doc.module_number} | status={doc.status.value}"
+                    f"lesson={lesson_text} | type={doc.material_type or 'none'} | status={doc.status.value}"
                 )
         if media_items:
             lines.append("")
             lines.append("Последние медиа:")
             for media in media_items[:20]:
-                module_text = f"module={media.module_number}" if media.module_number else "module=none"
-                lines.append(f"- media id={media.id} | {media.title} | type={media.media_type} | {module_text}")
+                lesson_text = media.lesson_key or "no-key"
+                lines.append(f"- media id={media.id} | {media.title} | type={media.media_type} | lesson={lesson_text}")
         await message.answer("\n".join(lines))
 
     @router.message(Command("reindex"))
@@ -1897,16 +1958,27 @@ def build_main_router(container: AppContainer) -> Router:
 
             module_number = state_data.get("material_module_number") or caption_metadata.get("module_number")
             season_title = state_data.get("material_season_title")
-            module_title = caption_metadata.get("module_title")
+            module_title = state_data.get("material_module_title") or caption_metadata.get("module_title")
+            lesson_key = state_data.get("material_lesson_key")
+            if lesson_key is None:
+                lesson_key = f"lesson_{module_number}" if module_number else "general"
             if module_title is None and season_title and module_number:
-                module_title = f"{season_title}, модуль {module_number}"
+                module_title = f"{season_title}, урок/модуль {module_number}"
             elif module_title is None and season_title:
-                module_title = season_title
+                module_title = f"{season_title}, общий материал"
+            elif module_title is None:
+                module_title = "Общий материал программы" if lesson_key == "general" else None
 
             material_type_from_state = state_data.get("material_type") if "material_type" in state_data else None
             material_type = material_type_from_state or caption_metadata.get("material_type")
             if material_type is None and "material_type" not in state_data and "домаш" in (document.file_name or "").lower():
                 material_type = "homework"
+            tags = build_content_tags(
+                lesson_key=lesson_key,
+                module_number=module_number,
+                season_title=season_title,
+                material_type=material_type,
+            )
 
             saved = await container.document_service.save_telegram_file(
                 bot=message.bot,
@@ -1925,17 +1997,20 @@ def build_main_router(container: AppContainer) -> Router:
                 telegram_file_id=document.file_id,
                 module_number=module_number,
                 module_title=module_title,
+                lesson_key=lesson_key,
                 material_type=material_type,
+                tags=tags,
             )
-            module_text = f"модуль {module_number}" if module_number else "без модуля"
+            module_text = f"урок/модуль {module_number}" if module_number else "общий материал"
             type_text = material_type or "другое"
             await message.answer(
                 "Материал загружен и обработан.\n\n"
                 f"- id: {indexed_document.id}\n"
                 f"- файл: {document.file_name}\n"
                 f"- формат: {extension}\n"
-                f"- модуль: {module_text}\n"
+                f"- привязка: {module_text}\n"
                 f"- тип: {type_text}\n"
+                f"- теги: {', '.join(tags)}\n"
                 "- видимость: общий материал программы\n\n"
                 f"Чтобы спросить именно по этому файлу, напиши: материал {indexed_document.id}: твой вопрос",
                 reply_markup=admin_menu_keyboard(),

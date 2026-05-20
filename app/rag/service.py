@@ -46,7 +46,9 @@ class RAGService:
                             "original_filename": document.original_filename,
                             "module_number": document.module_number,
                             "module_title": document.module_title,
+                            "lesson_key": document.lesson_key,
                             "material_type": document.material_type,
+                            "tags": document.tags or [],
                             "chunk_index": chunk.chunk_index,
                         },
                     }
@@ -164,7 +166,9 @@ class RAGService:
             "original_filename": metadata.get("original_filename") or match.original_filename,
             "module_number": metadata.get("module_number"),
             "module_title": metadata.get("module_title"),
+            "lesson_key": metadata.get("lesson_key"),
             "material_type": metadata.get("material_type"),
+            "tags": metadata.get("tags") or [],
             "chunk_index": metadata.get("chunk_index"),
             "score": round(match.score, 3),
         }
