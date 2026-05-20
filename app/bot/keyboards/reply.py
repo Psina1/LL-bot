@@ -72,6 +72,7 @@ ADMIN_TEXTS_BUTTONS = [
     [KeyboardButton(text="Изменить приветствие")],
     [KeyboardButton(text="Изменить помощь")],
     [KeyboardButton(text="Изменить расписание")],
+    [KeyboardButton(text="Изменить ДЗ №1")],
     [KeyboardButton(text="Изменить текст уведомления")],
     [KeyboardButton(text="Админ: меню")],
 ]
@@ -214,6 +215,36 @@ def materials_program_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Записи и материалы занятий", callback_data="materials:records")],
             [InlineKeyboardButton(text="Подкасты на основе занятий", callback_data="materials:podcasts")],
             [InlineKeyboardButton(text="Саммари занятий", callback_data="materials:summary")],
+            [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
+        ]
+    )
+
+
+def homework_program_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Список заданий", callback_data="homework:list")],
+            [InlineKeyboardButton(text="Помощь с домашкой", callback_data="homework:help")],
+            [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
+        ]
+    )
+
+
+def homework_list_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="ДЗ №1", callback_data="homework:hw1")],
+            [InlineKeyboardButton(text="Задай свой вопрос по заданию", callback_data="homework:help")],
+            [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
+        ]
+    )
+
+
+def homework_detail_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Задай свой вопрос по заданию", callback_data="homework:help")],
+            [InlineKeyboardButton(text="К списку заданий", callback_data="homework:list")],
             [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
         ]
     )

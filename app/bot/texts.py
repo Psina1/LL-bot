@@ -50,8 +50,14 @@ MATERIALS_TYPE_PROMPT = (
 HOMEWORK_MENU_PROMPT = "Что нужно по домашним заданиям?"
 
 HOMEWORK_HELP_PROMPT = (
-    "Задай вопрос по заданию. Например: что именно нужно сделать, как подойти к заданию "
-    "или как применить его к твоему проекту."
+    "Напиши вопрос по домашнему заданию. Например: что именно нужно сделать, как подойти к заданию "
+    "или как применить его к своей рабочей ситуации."
+)
+
+HOMEWORK_1_TEXT = (
+    "ДЗ №1 пока не заполнено.\n\n"
+    "Администратор добавит сюда описание задания и ссылку на Moodle/ПРОГРЕСС через раздел "
+    "«Админ: тексты» -> «Изменить ДЗ №1»."
 )
 
 PROJECT_CONTEXT_UPLOAD_PROMPT = (
@@ -96,6 +102,7 @@ BOT_TEXT_DEFAULTS = {
     "welcome": WELCOME_TEXT,
     "help": HELP_TEXT,
     "schedule": SCHEDULE_TEXT,
+    "homework_1": HOMEWORK_1_TEXT,
     NOTIFICATION_TEXT_KEY: NOTIFICATION_TEXT_DEFAULT,
 }
 
@@ -103,5 +110,6 @@ BOT_TEXT_LABELS = {
     "welcome": "приветствие",
     "help": "помощь",
     "schedule": "расписание",
+    "homework_1": "ДЗ №1",
     NOTIFICATION_TEXT_KEY: "текст уведомления",
 }

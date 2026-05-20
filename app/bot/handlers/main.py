@@ -27,7 +27,9 @@ from app.bot.keyboards.reply import (
     admin_texts_keyboard,
     feedback_keyboard,
     feedback_reason_keyboard,
-    homework_menu_keyboard,
+    homework_detail_keyboard,
+    homework_list_keyboard,
+    homework_program_keyboard,
     main_menu_keyboard,
     materials_program_keyboard,
     materials_season_keyboard,
@@ -791,19 +793,36 @@ def build_main_router(container: AppContainer) -> Router:
     async def send_homework_list(message: Message) -> None:
         async with SessionLocal() as session:
             docs = await DocumentRepository.list_homework_materials(session)
-        if not docs:
-            await message.answer(
-                "Домашние задания пока не найдены в загруженных материалах.\n\n"
-                "Когда администратор загрузит файл с домашками или пометит материал как `homework`, "
-                "я покажу список заданий здесь.",
-                reply_markup=user_main_menu(),
+        lines = [
+            "Список домашних заданий:",
+            "",
+            "- ДЗ №1",
+        ]
+        if docs:
+            lines.extend(["", "Дополнительные материалы по домашним заданиям:"])
+            for doc in docs[:10]:
+                date_text = format_lesson_date(doc.lesson_date)
+                lines.append(f"- id={doc.id} | {doc.title} | {date_text}")
+            lines.extend(
+                [
+                    "",
+                    "Чтобы спросить по конкретному файлу, можно написать:",
+                    f"материал {docs[0].id}: что нужно сделать?",
+                ]
             )
-            return
+        lines.extend(["", "Выбери задание или задай свой вопрос по домашке."])
+        await message.answer("\n".join(lines), reply_markup=homework_list_keyboard())
 
-        lines = ["Нашёл материалы по домашним заданиям:"]
-        for doc in docs:
-            lines.append(f"- {doc.title}")
-        await message.answer("\n".join(lines), reply_markup=user_main_menu())
+    async def send_homework_1(message: Message) -> None:
+        homework_text = await get_bot_text("homework_1")
+        await message.answer(homework_text, reply_markup=homework_detail_keyboard())
+
+    async def start_homework_help(message: Message, state: FSMContext) -> None:
+        await state.set_state(UserFlow.waiting_for_homework_help_question)
+        await message.answer(
+            HOMEWORK_HELP_PROMPT,
+            reply_markup=user_main_menu(),
+        )
 
     async def build_admin_status_report() -> str:
         lines = ["Статус бота:"]
@@ -999,6 +1018,28 @@ def build_main_router(container: AppContainer) -> Router:
         await callback.answer()
         if callback.message:
             await callback.message.answer("Выбери действие:", reply_markup=user_main_menu())
+
+    @router.callback_query(F.data == "homework:list")
+    async def homework_list_callback_handler(callback: CallbackQuery) -> None:
+        await upsert_telegram_user(callback.from_user)
+        await callback.answer()
+        if callback.message:
+            await send_homework_list(callback.message)
+
+    @router.callback_query(F.data == "homework:hw1")
+    async def homework_1_callback_handler(callback: CallbackQuery) -> None:
+        await upsert_telegram_user(callback.from_user)
+        await callback.answer()
+        if callback.message:
+            await send_homework_1(callback.message)
+
+    @router.callback_query(F.data == "homework:help")
+    async def homework_help_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
+        await upsert_telegram_user(callback.from_user)
+        await state.clear()
+        await callback.answer()
+        if callback.message:
+            await start_homework_help(callback.message, state)
 
     @router.callback_query(F.data.startswith("start_notification_time:"))
     async def start_notification_time_callback_handler(callback: CallbackQuery) -> None:
@@ -1724,7 +1765,17 @@ def build_main_router(container: AppContainer) -> Router:
         lines.append("Выбери текст, который нужно заменить. Удаления и опасных действий здесь нет.")
         await message.answer("\n".join(lines), reply_markup=admin_texts_keyboard())
 
-    @router.message(F.text.in_(["Изменить приветствие", "Изменить помощь", "Изменить расписание", "Изменить текст уведомления"]))
+    @router.message(
+        F.text.in_(
+            [
+                "Изменить приветствие",
+                "Изменить помощь",
+                "Изменить расписание",
+                "Изменить ДЗ №1",
+                "Изменить текст уведомления",
+            ]
+        )
+    )
     async def admin_edit_text_prompt_handler(message: Message, state: FSMContext) -> None:
         if not await require_admin(message):
             return
@@ -1732,6 +1783,7 @@ def build_main_router(container: AppContainer) -> Router:
             "Изменить приветствие": "welcome",
             "Изменить помощь": "help",
             "Изменить расписание": "schedule",
+            "Изменить ДЗ №1": "homework_1",
             "Изменить текст уведомления": NOTIFICATION_TEXT_KEY,
         }
         key = mapping[message.text]
@@ -2028,18 +2080,22 @@ def build_main_router(container: AppContainer) -> Router:
     @router.message(F.text == "Домашние задания")
     async def homework_handler(message: Message) -> None:
         await ensure_user(message)
-        await message.answer(HOMEWORK_MENU_PROMPT, reply_markup=homework_menu_keyboard())
+        await message.answer(HOMEWORK_MENU_PROMPT, reply_markup=homework_program_keyboard())
 
     @router.message(F.text == "Список заданий")
     async def homework_list_handler(message: Message) -> None:
         await ensure_user(message)
         await send_homework_list(message)
 
+    @router.message(F.text == "ДЗ №1")
+    async def homework_1_text_handler(message: Message) -> None:
+        await ensure_user(message)
+        await send_homework_1(message)
+
     @router.message(F.text == "Помощь с домашкой")
     async def homework_help_prompt_handler(message: Message, state: FSMContext) -> None:
         await ensure_user(message)
-        await state.set_state(UserFlow.waiting_for_homework_help_question)
-        await message.answer(HOMEWORK_HELP_PROMPT, reply_markup=homework_menu_keyboard())
+        await start_homework_help(message, state)
 
     @router.message(F.text.in_(["Уточнить контекст моего проекта", "Контекст моего проекта", "Мой проект"]))
     async def project_handler(message: Message, state: FSMContext) -> None:
@@ -2169,7 +2225,34 @@ def build_main_router(container: AppContainer) -> Router:
             await send_materials_by_lookup(message, material_lookup)
             await state.clear()
             return
-        await answer_question(message, message.text, state, mode="homework_help")
+        if looks_like_technical_question(message.text):
+            mode, extra_context, force_rag = question_section_context("technical")
+            await answer_question(
+                message,
+                message.text,
+                state,
+                mode=mode,
+                force_rag=force_rag,
+                extra_context=extra_context,
+            )
+            await state.clear()
+            return
+
+        homework_text = await get_bot_text("homework_1")
+        extra_context = (
+            "Раздел: помощь с домашним заданием.\n"
+            "Используй описание ДЗ №1 ниже как основной контекст. "
+            "Если в описании нет точного ответа, скажи об этом и предложи уточнить вопрос у организаторов.\n\n"
+            f"Описание ДЗ №1:\n{homework_text}"
+        )
+        await answer_question(
+            message,
+            message.text,
+            state,
+            mode="homework_help",
+            force_rag=False,
+            extra_context=extra_context,
+        )
         await state.clear()
 
     @router.message(UserFlow.waiting_for_file_question, F.text)
