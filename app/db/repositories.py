@@ -328,6 +328,7 @@ class DocumentRepository:
         module_number: int | None = None,
         module_title: str | None = None,
         lesson_key: str | None = None,
+        lesson_date=None,
         material_type: str | None = None,
         tags: list[str] | None = None,
         status: DocumentStatusEnum = DocumentStatusEnum.uploaded,
@@ -342,6 +343,7 @@ class DocumentRepository:
             module_number=module_number,
             module_title=module_title,
             lesson_key=lesson_key,
+            lesson_date=lesson_date,
             material_type=material_type,
             tags=tags or [],
             status=status,
@@ -389,6 +391,41 @@ class DocumentRepository:
                 )
             )
             .order_by(Document.created_at.desc())
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def list_visible_by_lesson(
+        session: AsyncSession,
+        user_id: int,
+        lesson_key: str | None = None,
+        lesson_date=None,
+        limit: int = 50,
+    ) -> list[Document]:
+        if lesson_key and lesson_date:
+            lesson_filter = and_(Document.lesson_key == lesson_key, Document.lesson_date == lesson_date)
+        elif lesson_key:
+            lesson_filter = Document.lesson_key == lesson_key
+        elif lesson_date:
+            lesson_filter = Document.lesson_date == lesson_date
+        else:
+            return []
+
+        stmt = (
+            select(Document)
+            .where(
+                and_(
+                    Document.status == DocumentStatusEnum.ready,
+                    lesson_filter,
+                    or_(
+                        Document.visibility == VisibilityEnum.global_,
+                        and_(Document.visibility == VisibilityEnum.user, Document.owner_user_id == user_id),
+                    ),
+                )
+            )
+            .order_by(Document.module_number.asc().nulls_last(), Document.created_at.desc())
             .limit(limit)
         )
         result = await session.execute(stmt)
@@ -610,6 +647,7 @@ class ProgramMediaRepository:
         module_number: int | None = None,
         module_title: str | None = None,
         lesson_key: str | None = None,
+        lesson_date=None,
         tags: list[str] | None = None,
     ) -> ProgramMedia:
         media = ProgramMedia(
@@ -624,6 +662,7 @@ class ProgramMediaRepository:
             module_number=module_number,
             module_title=module_title,
             lesson_key=lesson_key,
+            lesson_date=lesson_date,
             tags=tags or [],
             created_by_user_id=created_by_user_id,
         )
@@ -647,6 +686,31 @@ class ProgramMediaRepository:
     async def get_by_id(session: AsyncSession, media_id: int) -> ProgramMedia | None:
         result = await session.execute(select(ProgramMedia).where(ProgramMedia.id == media_id))
         return result.scalar_one_or_none()
+
+    @staticmethod
+    async def list_by_lesson(
+        session: AsyncSession,
+        lesson_key: str | None = None,
+        lesson_date=None,
+        limit: int = 20,
+    ) -> list[ProgramMedia]:
+        if lesson_key and lesson_date:
+            lesson_filter = and_(ProgramMedia.lesson_key == lesson_key, ProgramMedia.lesson_date == lesson_date)
+        elif lesson_key:
+            lesson_filter = ProgramMedia.lesson_key == lesson_key
+        elif lesson_date:
+            lesson_filter = ProgramMedia.lesson_date == lesson_date
+        else:
+            return []
+
+        stmt = (
+            select(ProgramMedia)
+            .where(lesson_filter)
+            .order_by(ProgramMedia.media_type.asc(), ProgramMedia.created_at.desc())
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
 
     @staticmethod
     async def list_latest(session: AsyncSession, limit: int = 50) -> list[ProgramMedia]:

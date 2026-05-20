@@ -101,6 +101,11 @@ ADMIN_MATERIAL_TYPE_BUTTONS = [
     [KeyboardButton(text="Админ: меню")],
 ]
 
+ADMIN_LESSON_DATE_BUTTONS = [
+    [KeyboardButton(text="Дата: без даты")],
+    [KeyboardButton(text="Админ: меню")],
+]
+
 ADMIN_MEDIA_TYPE_BUTTONS = [
     [KeyboardButton(text="Медиа: видео")],
     [KeyboardButton(text="Медиа: подкаст")],
@@ -167,6 +172,10 @@ def admin_material_module_keyboard() -> ReplyKeyboardMarkup:
 
 def admin_material_type_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=ADMIN_MATERIAL_TYPE_BUTTONS, resize_keyboard=True)
+
+
+def admin_lesson_date_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=ADMIN_LESSON_DATE_BUTTONS, resize_keyboard=True)
 
 
 def admin_media_type_keyboard() -> ReplyKeyboardMarkup:

@@ -88,6 +88,7 @@ class Document(Base):
     module_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     module_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     lesson_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    lesson_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     material_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     tags: Mapped[list[str]] = mapped_column(JSONB().with_variant(JSON, "sqlite"), default=list)
     status: Mapped[DocumentStatusEnum] = mapped_column(
@@ -226,6 +227,7 @@ class ProgramMedia(Base):
     module_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     module_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     lesson_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    lesson_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     tags: Mapped[list[str]] = mapped_column(JSONB().with_variant(JSON, "sqlite"), default=list)
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

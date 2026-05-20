@@ -4,7 +4,7 @@ import logging
 import random
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +19,7 @@ from app.bot.keyboards.reply import (
     admin_material_module_keyboard,
     admin_material_season_keyboard,
     admin_material_type_keyboard,
+    admin_lesson_date_keyboard,
     admin_media_module_keyboard,
     admin_media_type_keyboard,
     admin_menu_keyboard,
@@ -341,10 +342,118 @@ def build_main_router(container: AppContainer) -> Router:
             f"{prefix}_lesson_key": lesson_key,
         }
 
+    MONTHS_RU = {
+        "января": 1,
+        "январь": 1,
+        "февраля": 2,
+        "февраль": 2,
+        "марта": 3,
+        "март": 3,
+        "апреля": 4,
+        "апрель": 4,
+        "мая": 5,
+        "май": 5,
+        "июня": 6,
+        "июнь": 6,
+        "июля": 7,
+        "июль": 7,
+        "августа": 8,
+        "август": 8,
+        "сентября": 9,
+        "сентябрь": 9,
+        "октября": 10,
+        "октябрь": 10,
+        "ноября": 11,
+        "ноябрь": 11,
+        "декабря": 12,
+        "декабрь": 12,
+    }
+
+    def parse_lesson_date_input(text_value: str | None) -> date | None:
+        text = (text_value or "").strip().lower()
+        if not text or text in {"дата: без даты", "без даты", "нет", "-"}:
+            return None
+
+        iso_match = re.search(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b", text)
+        if iso_match:
+            return date(int(iso_match.group(1)), int(iso_match.group(2)), int(iso_match.group(3)))
+
+        numeric_match = re.search(r"\b(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\b", text)
+        if numeric_match:
+            day = int(numeric_match.group(1))
+            month = int(numeric_match.group(2))
+            year_raw = numeric_match.group(3)
+            year = datetime.now().year if year_raw is None else int(year_raw)
+            if year < 100:
+                year += 2000
+            return date(year, month, day)
+
+        month_names = "|".join(MONTHS_RU.keys())
+        ru_match = re.search(rf"\b(\d{{1,2}})(?:-?го)?\s+({month_names})(?:\s+(\d{{4}}))?\b", text)
+        if ru_match:
+            day = int(ru_match.group(1))
+            month = MONTHS_RU[ru_match.group(2)]
+            year = int(ru_match.group(3)) if ru_match.group(3) else datetime.now().year
+            return date(year, month, day)
+
+        raise ValueError("invalid_lesson_date")
+
+    def format_lesson_date(value: date | None) -> str:
+        return value.strftime("%d.%m.%Y") if value else "без даты"
+
+    def extract_material_lookup(text_value: str | None) -> dict[str, Any] | None:
+        text = (text_value or "").strip().lower()
+        if not text:
+            return None
+
+        has_material_intent = any(
+            marker in text
+            for marker in [
+                "материал",
+                "запис",
+                "видео",
+                "подкаст",
+                "саммари",
+                "конспект",
+                "презентац",
+                "файл",
+                "урок",
+                "заняти",
+                "модул",
+            ]
+        )
+        if not has_material_intent:
+            return None
+
+        lesson_date = None
+        try:
+            lesson_date = parse_lesson_date_input(text)
+        except ValueError:
+            lesson_date = None
+
+        lesson_key = None
+        module_number = None
+        module_match = re.search(r"(?:урок|модуль|занятие)\s*(?:№|номер)?\s*(\d+)", text, flags=re.IGNORECASE)
+        if not module_match:
+            module_match = re.search(r"\b(\d+)\s*(?:урок|модуль|занятие)\b", text, flags=re.IGNORECASE)
+        if module_match:
+            module_number = int(module_match.group(1))
+            lesson_key = f"lesson_{module_number}"
+
+        if not lesson_key and lesson_date is None:
+            return None
+
+        return {
+            "lesson_key": lesson_key,
+            "lesson_date": lesson_date,
+            "module_number": module_number,
+        }
+
     def build_content_tags(
         *,
         lesson_key: str | None,
         module_number: int | None,
+        lesson_date: date | None = None,
         season_title: str | None = None,
         material_type: str | None = None,
         media_type: str | None = None,
@@ -356,6 +465,8 @@ def build_main_router(container: AppContainer) -> Router:
             tags.append(f"lesson_key:{lesson_key}")
         if module_number:
             tags.extend([f"lesson:{module_number}", f"module:{module_number}"])
+        if lesson_date:
+            tags.append(f"date:{lesson_date.isoformat()}")
         if material_type:
             tags.append(f"type:{material_type}")
         if media_type:
@@ -535,9 +646,79 @@ def build_main_router(container: AppContainer) -> Router:
         )
         await message.answer("\n".join(lines), reply_markup=user_main_menu())
 
+    async def send_materials_by_lookup(message: Message, lookup: dict[str, Any], telegram_user=None) -> bool:
+        user, session = await get_user_and_session(message, telegram_user=telegram_user)
+        try:
+            docs = await DocumentRepository.list_visible_by_lesson(
+                session=session,
+                user_id=user.id,
+                lesson_key=lookup.get("lesson_key"),
+                lesson_date=lookup.get("lesson_date"),
+                limit=50,
+            )
+            media_items = await ProgramMediaRepository.list_by_lesson(
+                session=session,
+                lesson_key=lookup.get("lesson_key"),
+                lesson_date=lookup.get("lesson_date"),
+                limit=20,
+            )
+        finally:
+            await session.close()
+
+        lookup_parts = []
+        if lookup.get("module_number"):
+            lookup_parts.append(f"урок/модуль {lookup['module_number']}")
+        if lookup.get("lesson_date"):
+            lookup_parts.append(f"дата {format_lesson_date(lookup['lesson_date'])}")
+        lookup_text = ", ".join(lookup_parts) or "указанная привязка"
+
+        if not docs and not media_items:
+            await message.answer(
+                f"Я не нашёл загруженных материалов по запросу: {lookup_text}.\n\n"
+                "Возможно, материал ещё не загружен или у него не проставлена дата/привязка к уроку.",
+                reply_markup=user_main_menu(),
+            )
+            return True
+
+        if docs:
+            lines = [
+                f"Нашёл текстовые материалы: {lookup_text}.",
+                "",
+            ]
+            for doc in docs[:20]:
+                date_hint = format_lesson_date(doc.lesson_date)
+                module_hint = f"урок/модуль {doc.module_number}" if doc.module_number else "общий материал"
+                type_hint = doc.material_type or "без типа"
+                lines.append(f"- id={doc.id} | {doc.title} | {module_hint} | {date_hint} | {type_hint}")
+            lines.extend(
+                [
+                    "",
+                    "Чтобы спросить по конкретному файлу, напиши так:",
+                    f"материал {docs[0].id}: кратко что в этом файле?",
+                ]
+            )
+            await message.answer("\n".join(lines), reply_markup=user_main_menu())
+
+        videos = [media for media in media_items if media.media_type == "video"]
+        podcasts = [media for media in media_items if media.media_type == "podcast"]
+        if videos:
+            await message.answer(
+                f"Нашёл видео: {lookup_text}. Выбери нужную запись:",
+                reply_markup=media_list_keyboard(videos, media_type="video"),
+            )
+        if podcasts:
+            await message.answer(
+                f"Нашёл подкасты: {lookup_text}. Выбери нужный файл:",
+                reply_markup=media_list_keyboard(podcasts, media_type="podcast"),
+            )
+        if not docs and (videos or podcasts):
+            await message.answer("После просмотра можно вернуться в главное меню.", reply_markup=user_main_menu())
+        return True
+
     def media_caption(media) -> str:
         module_text = f"Модуль {media.module_number}" if media.module_number else "Без модуля"
-        return f"{media.title}\n{module_text}"
+        date_text = format_lesson_date(media.lesson_date)
+        return f"{media.title}\n{module_text}\nДата: {date_text}"
 
     async def send_media_asset(message: Message, media) -> None:
         caption = media_caption(media)
@@ -1007,7 +1188,7 @@ def build_main_router(container: AppContainer) -> Router:
         await state.set_state(AdminFlow.waiting_for_material_season)
         await message.answer(
             "Запускаю мастер загрузки материала.\n\n"
-            "Шаг 1 из 4: выбери сезон материала.",
+            "Шаг 1 из 5: выбери сезон материала.",
             reply_markup=admin_material_season_keyboard(),
         )
 
@@ -1020,7 +1201,7 @@ def build_main_router(container: AppContainer) -> Router:
         await state.update_data(material_season_title=season_title)
         await state.set_state(AdminFlow.waiting_for_material_module)
         await message.answer(
-            "Шаг 2 из 4: выбери привязку материала.\n\n"
+            "Шаг 2 из 5: выбери привязку материала.\n\n"
             "Это нужно, чтобы бот понимал: файл общий или относится к конкретному уроку/модулю.",
             reply_markup=admin_material_module_keyboard(),
         )
@@ -1037,12 +1218,42 @@ def build_main_router(container: AppContainer) -> Router:
         data = await state.get_data()
         payload = lesson_payload("material", data.get("material_season_title"), message.text)
         await state.update_data(**payload)
-        await state.set_state(AdminFlow.waiting_for_material_type)
-        await message.answer("Шаг 3 из 4: выбери тип материала.", reply_markup=admin_material_type_keyboard())
+        await state.set_state(AdminFlow.waiting_for_material_date)
+        await message.answer(
+            "Шаг 3 из 5: укажи дату урока.\n\n"
+            "Можно написать `31.05.2026`, `31.05` или `31 мая`. "
+            "Если материал общий и без даты, нажми «Дата: без даты».",
+            reply_markup=admin_lesson_date_keyboard(),
+            parse_mode=None,
+        )
 
     @router.message(AdminFlow.waiting_for_material_module)
     async def admin_material_module_invalid_handler(message: Message) -> None:
         await message.answer("Выбери модуль кнопкой ниже или нажми «Админ: меню».", reply_markup=admin_material_module_keyboard())
+
+    @router.message(AdminFlow.waiting_for_material_date, F.text)
+    async def admin_material_date_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        if message.text == "Админ: меню":
+            await state.clear()
+            await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
+            return
+        try:
+            lesson_date = parse_lesson_date_input(message.text)
+        except ValueError:
+            await message.answer(
+                "Не распознал дату. Напиши в формате `31.05.2026`, `31.05`, `31 мая` "
+                "или нажми «Дата: без даты».",
+                reply_markup=admin_lesson_date_keyboard(),
+                parse_mode=None,
+            )
+            return
+
+        await state.update_data(material_lesson_date=lesson_date.isoformat() if lesson_date else None)
+        await state.set_state(AdminFlow.waiting_for_material_type)
+        await message.answer("Шаг 4 из 5: выбери тип материала.", reply_markup=admin_material_type_keyboard())
 
     @router.message(AdminFlow.waiting_for_material_type, F.text.startswith("Тип: "))
     async def admin_material_type_handler(message: Message, state: FSMContext) -> None:
@@ -1061,14 +1272,17 @@ def build_main_router(container: AppContainer) -> Router:
         data = await state.get_data()
         season_title = data.get("material_season_title") or "без сезона"
         module_number = data.get("material_module_number")
+        lesson_date_raw = data.get("material_lesson_date")
+        lesson_date = date.fromisoformat(lesson_date_raw) if lesson_date_raw else None
         module_text = f"урок/модуль {module_number}" if module_number else "общий материал"
         type_text = message.text.replace("Тип: ", "")
         await state.set_state(AdminFlow.waiting_for_global_file)
         await message.answer(
-            "Шаг 4 из 4: пришли файл PDF/DOCX/PPTX/TXT.\n\n"
+            "Шаг 5 из 5: пришли файл PDF/DOCX/PPTX/TXT.\n\n"
             f"Будет сохранено так:\n"
             f"- сезон: {season_title}\n"
             f"- привязка: {module_text}\n"
+            f"- дата: {format_lesson_date(lesson_date)}\n"
             f"- тип: {type_text}",
             reply_markup=admin_menu_keyboard(),
         )
@@ -1084,7 +1298,7 @@ def build_main_router(container: AppContainer) -> Router:
         await state.set_state(AdminFlow.waiting_for_media_type)
         await message.answer(
             "Запускаю мастер загрузки медиа.\n\n"
-            "Шаг 1 из 3: выбери тип файла.",
+            "Шаг 1 из 4: выбери тип файла.",
             reply_markup=admin_media_type_keyboard(),
         )
 
@@ -1097,7 +1311,7 @@ def build_main_router(container: AppContainer) -> Router:
         await state.update_data(media_type=media_type)
         await state.set_state(AdminFlow.waiting_for_media_module)
         await message.answer(
-            "Шаг 2 из 3: выбери привязку медиа.\n\n"
+            "Шаг 2 из 4: выбери привязку медиа.\n\n"
             "Это нужно, чтобы видео или подкаст относились к конкретному уроку/модулю либо были общими.",
             reply_markup=admin_media_module_keyboard(),
         )
@@ -1113,17 +1327,48 @@ def build_main_router(container: AppContainer) -> Router:
             return
         payload = lesson_payload("media", "Сезон 1. Бизнес-консалтинг", message.text)
         await state.update_data(**payload)
+        await state.set_state(AdminFlow.waiting_for_media_date)
+        await message.answer(
+            "Шаг 3 из 4: укажи дату урока.\n\n"
+            "Можно написать `31.05.2026`, `31.05` или `31 мая`. "
+            "Если медиа общее и без даты, нажми «Дата: без даты».",
+            reply_markup=admin_lesson_date_keyboard(),
+            parse_mode=None,
+        )
+
+    @router.message(AdminFlow.waiting_for_media_date, F.text)
+    async def admin_media_date_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        if message.text == "Админ: меню":
+            await state.clear()
+            await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
+            return
+        try:
+            lesson_date = parse_lesson_date_input(message.text)
+        except ValueError:
+            await message.answer(
+                "Не распознал дату. Напиши в формате `31.05.2026`, `31.05`, `31 мая` "
+                "или нажми «Дата: без даты».",
+                reply_markup=admin_lesson_date_keyboard(),
+                parse_mode=None,
+            )
+            return
+
+        await state.update_data(media_lesson_date=lesson_date.isoformat() if lesson_date else None)
         await state.set_state(AdminFlow.waiting_for_media_file)
 
         data = await state.get_data()
         media_type = data.get("media_type")
-        module_number = payload.get("media_module_number")
+        module_number = data.get("media_module_number")
         type_text = "видео" if media_type == "video" else "аудиоподкаст"
         module_text = f"урок/модуль {module_number}" if module_number else "общий материал"
         await message.answer(
-            "Шаг 3 из 3: пришли файл в Telegram.\n\n"
+            "Шаг 4 из 4: пришли файл в Telegram.\n\n"
             f"- тип: {type_text}\n"
             f"- привязка: {module_text}\n\n"
+            f"- дата: {format_lesson_date(lesson_date)}\n\n"
             "Название можно написать в подписи к файлу. Если подписи нет, возьму имя файла.",
             reply_markup=admin_menu_keyboard(),
         )
@@ -1159,6 +1404,8 @@ def build_main_router(container: AppContainer) -> Router:
         module_number = state_data.get("media_module_number")
         module_title = state_data.get("media_module_title")
         lesson_key = state_data.get("media_lesson_key")
+        lesson_date_raw = state_data.get("media_lesson_date")
+        lesson_date = date.fromisoformat(lesson_date_raw) if lesson_date_raw else None
         if media_type not in {"video", "podcast"}:
             await message.answer("Не понял тип медиа. Начни заново через «Админ: загрузить медиа».", reply_markup=admin_menu_keyboard())
             await state.clear()
@@ -1173,6 +1420,7 @@ def build_main_router(container: AppContainer) -> Router:
         tags = build_content_tags(
             lesson_key=lesson_key,
             module_number=module_number,
+            lesson_date=lesson_date,
             season_title="Сезон 1. Бизнес-консалтинг",
             media_type=media_type,
         )
@@ -1190,6 +1438,7 @@ def build_main_router(container: AppContainer) -> Router:
                 module_number=module_number,
                 module_title=module_title,
                 lesson_key=lesson_key,
+                lesson_date=lesson_date,
                 tags=tags,
                 created_by_user_id=user.id,
             )
@@ -1202,6 +1451,7 @@ def build_main_router(container: AppContainer) -> Router:
             f"- тип: {type_text}\n"
             f"- название: {media.title}\n"
             f"- привязка: {module_text}\n"
+            f"- дата: {format_lesson_date(lesson_date)}\n"
             f"- теги: {', '.join(tags)}\n\n"
             "Теперь он будет доступен в разделе «Материалы программы».",
             reply_markup=admin_menu_keyboard(),
@@ -1224,16 +1474,21 @@ def build_main_router(container: AppContainer) -> Router:
         if docs:
             for doc in docs[:30]:
                 lesson_text = doc.lesson_key or "no-key"
+                date_text = format_lesson_date(doc.lesson_date)
                 lines.append(
                     f"- doc id={doc.id} | {doc.title} | visibility={doc.visibility.value} | "
-                    f"lesson={lesson_text} | type={doc.material_type or 'none'} | status={doc.status.value}"
+                    f"lesson={lesson_text} | date={date_text} | type={doc.material_type or 'none'} | status={doc.status.value}"
                 )
         if media_items:
             lines.append("")
             lines.append("Последние медиа:")
             for media in media_items[:20]:
                 lesson_text = media.lesson_key or "no-key"
-                lines.append(f"- media id={media.id} | {media.title} | type={media.media_type} | lesson={lesson_text}")
+                date_text = format_lesson_date(media.lesson_date)
+                lines.append(
+                    f"- media id={media.id} | {media.title} | type={media.media_type} | "
+                    f"lesson={lesson_text} | date={date_text}"
+                )
         await message.answer("\n".join(lines))
 
     @router.message(Command("reindex"))
@@ -1858,6 +2113,11 @@ def build_main_router(container: AppContainer) -> Router:
             await answer_material_question(message, document_id, question, state)
             await state.clear()
             return
+        material_lookup = extract_material_lookup(message.text)
+        if material_lookup is not None:
+            await send_materials_by_lookup(message, material_lookup)
+            await state.clear()
+            return
         await answer_question(message, message.text, state, mode="training_qa")
         await state.clear()
 
@@ -1869,6 +2129,11 @@ def build_main_router(container: AppContainer) -> Router:
         if material_question is not None:
             document_id, question = material_question
             await answer_material_question(message, document_id, question, state)
+            await state.clear()
+            return
+        material_lookup = extract_material_lookup(message.text)
+        if material_lookup is not None:
+            await send_materials_by_lookup(message, material_lookup)
             await state.clear()
             return
 
@@ -1899,6 +2164,11 @@ def build_main_router(container: AppContainer) -> Router:
             await answer_material_question(message, document_id, question, state)
             await state.clear()
             return
+        material_lookup = extract_material_lookup(message.text)
+        if material_lookup is not None:
+            await send_materials_by_lookup(message, material_lookup)
+            await state.clear()
+            return
         await answer_question(message, message.text, state, mode="homework_help")
         await state.clear()
 
@@ -1919,6 +2189,11 @@ def build_main_router(container: AppContainer) -> Router:
         if material_question is not None:
             document_id, question = material_question
             await answer_material_question(message, document_id, question, state)
+            await state.clear()
+            return
+        material_lookup = extract_material_lookup(message.text)
+        if material_lookup is not None:
+            await send_materials_by_lookup(message, material_lookup)
             await state.clear()
             return
         await answer_question(message, message.text, state, mode="followup")
@@ -1960,6 +2235,8 @@ def build_main_router(container: AppContainer) -> Router:
             season_title = state_data.get("material_season_title")
             module_title = state_data.get("material_module_title") or caption_metadata.get("module_title")
             lesson_key = state_data.get("material_lesson_key")
+            lesson_date_raw = state_data.get("material_lesson_date")
+            lesson_date = date.fromisoformat(lesson_date_raw) if lesson_date_raw else None
             if lesson_key is None:
                 lesson_key = f"lesson_{module_number}" if module_number else "general"
             if module_title is None and season_title and module_number:
@@ -1976,6 +2253,7 @@ def build_main_router(container: AppContainer) -> Router:
             tags = build_content_tags(
                 lesson_key=lesson_key,
                 module_number=module_number,
+                lesson_date=lesson_date,
                 season_title=season_title,
                 material_type=material_type,
             )
@@ -1998,6 +2276,7 @@ def build_main_router(container: AppContainer) -> Router:
                 module_number=module_number,
                 module_title=module_title,
                 lesson_key=lesson_key,
+                lesson_date=lesson_date,
                 material_type=material_type,
                 tags=tags,
             )
@@ -2009,6 +2288,7 @@ def build_main_router(container: AppContainer) -> Router:
                 f"- файл: {document.file_name}\n"
                 f"- формат: {extension}\n"
                 f"- привязка: {module_text}\n"
+                f"- дата: {format_lesson_date(lesson_date)}\n"
                 f"- тип: {type_text}\n"
                 f"- теги: {', '.join(tags)}\n"
                 "- видимость: общий материал программы\n\n"
@@ -2076,6 +2356,10 @@ def build_main_router(container: AppContainer) -> Router:
         if material_question is not None:
             document_id, question = material_question
             await answer_material_question(message, document_id, question, state)
+            return
+        material_lookup = extract_material_lookup(message.text)
+        if material_lookup is not None:
+            await send_materials_by_lookup(message, material_lookup)
             return
         if looks_like_technical_question(message.text):
             mode, extra_context, force_rag = question_section_context("technical")

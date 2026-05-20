@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS documents (
     module_number INTEGER,
     module_title VARCHAR(255),
     lesson_key VARCHAR(100),
+    lesson_date DATE,
     material_type VARCHAR(100),
     tags JSONB NOT NULL DEFAULT '[]'::jsonb,
     status document_status_enum NOT NULL DEFAULT 'uploaded',
@@ -124,6 +125,7 @@ CREATE TABLE IF NOT EXISTS program_media (
     module_number INTEGER,
     module_title VARCHAR(255),
     lesson_key VARCHAR(100),
+    lesson_date DATE,
     tags JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -141,6 +143,7 @@ CREATE INDEX IF NOT EXISTS ix_users_telegram_id ON users(telegram_id);
 CREATE INDEX IF NOT EXISTS ix_documents_visibility_owner ON documents(visibility, owner_user_id);
 CREATE INDEX IF NOT EXISTS ix_documents_module_number ON documents(module_number);
 CREATE INDEX IF NOT EXISTS ix_documents_lesson_key ON documents(lesson_key);
+CREATE INDEX IF NOT EXISTS ix_documents_lesson_date ON documents(lesson_date);
 CREATE INDEX IF NOT EXISTS ix_chunks_document_id ON chunks(document_id);
 CREATE INDEX IF NOT EXISTS ix_messages_user_created_at ON messages(user_id, created_at);
 CREATE INDEX IF NOT EXISTS ix_user_notification_settings_user_id ON user_notification_settings(user_id);
@@ -150,4 +153,5 @@ CREATE INDEX IF NOT EXISTS ix_user_files_document_id ON user_files(document_id);
 CREATE INDEX IF NOT EXISTS ix_program_media_type_created_at ON program_media(media_type, created_at);
 CREATE INDEX IF NOT EXISTS ix_program_media_module_number ON program_media(module_number);
 CREATE INDEX IF NOT EXISTS ix_program_media_lesson_key ON program_media(lesson_key);
+CREATE INDEX IF NOT EXISTS ix_program_media_lesson_date ON program_media(lesson_date);
 CREATE INDEX IF NOT EXISTS ix_errors_created_at ON errors(created_at DESC);

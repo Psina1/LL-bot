@@ -91,6 +91,7 @@ class DocumentService:
         module_number: int | None = None,
         module_title: str | None = None,
         lesson_key: str | None = None,
+        lesson_date=None,
         material_type: str | None = None,
         tags: list[str] | None = None,
     ) -> Document:
@@ -105,6 +106,7 @@ class DocumentService:
             module_number=module_number,
             module_title=module_title,
             lesson_key=lesson_key,
+            lesson_date=lesson_date,
             material_type=material_type,
             tags=tags,
             status=DocumentStatusEnum.uploaded,
