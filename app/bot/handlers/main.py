@@ -31,7 +31,9 @@ from app.bot.keyboards.reply import (
     materials_program_keyboard,
     materials_season_keyboard,
     materials_type_keyboard,
+    media_list_keyboard,
     notification_settings_keyboard,
+    podcast_empty_keyboard,
     project_context_keyboard,
     project_help_keyboard,
     question_section_keyboard,
@@ -512,30 +514,53 @@ def build_main_router(container: AppContainer) -> Router:
                 "Возможно, Telegram больше не принимает этот file_id. Админу нужно загрузить файл заново."
             )
 
-    async def send_program_media(message: Message, media_type: str, title: str, show_menu_after: bool = True) -> bool:
+    async def show_media_picker(
+        message: Message,
+        media_type: str,
+        title: str,
+        empty_text: str,
+        include_docs_button: bool = False,
+        empty_reply_markup=None,
+    ) -> bool:
         async with SessionLocal() as session:
             media_items = await ProgramMediaRepository.list_by_type(session, media_type=media_type, limit=10)
 
         if not media_items:
+            await message.answer(empty_text, reply_markup=empty_reply_markup or user_main_menu())
             return False
 
-        await message.answer(title)
-        for media in media_items:
-            await send_media_asset(message, media)
-        if show_menu_after:
-            await message.answer("Если хочешь продолжить, выбери действие:", reply_markup=user_main_menu())
+        await message.answer(
+            title,
+            reply_markup=media_list_keyboard(
+                media_items=media_items,
+                media_type=media_type,
+                include_docs_button=include_docs_button,
+            ),
+        )
         return True
 
     async def send_records_and_materials(message: Message, telegram_user=None) -> None:
-        has_video = await send_program_media(
+        has_video = await show_media_picker(
             message,
             media_type="video",
-            title="Записи занятий:",
-            show_menu_after=False,
+            title="Выбери запись занятия:",
+            empty_text="Видео записей пока не загружены. Показываю текстовые материалы.",
+            include_docs_button=True,
         )
         if not has_video:
-            await message.answer("Видео записей пока не загружены.")
-        await send_materials_list(message, telegram_user=telegram_user)
+            await send_materials_list(message, telegram_user=telegram_user)
+
+    async def send_podcast_text_summary(message: Message, state: FSMContext, telegram_user=None) -> None:
+        await message.answer("Собираю текстовую подкаст-выжимку по загруженным материалам.")
+        await answer_question(
+            message,
+            "Сделай короткий текстовый подкаст-конспект по материалам занятий сезона 1. "
+            "Формат: 5 ключевых мыслей, практический вывод, что попробовать на работе.",
+            state,
+            mode="materials_podcast_summary",
+            telegram_user=telegram_user,
+        )
+        await state.clear()
 
     async def send_homework_list(message: Message) -> None:
         async with SessionLocal() as session:
@@ -1557,27 +1582,33 @@ def build_main_router(container: AppContainer) -> Router:
         if callback.message:
             await send_records_and_materials(callback.message, telegram_user=callback.from_user)
 
+    @router.callback_query(F.data == "materials:docs")
+    async def materials_docs_callback_handler(callback: CallbackQuery) -> None:
+        await upsert_telegram_user(callback.from_user)
+        await callback.answer()
+        if callback.message:
+            await send_materials_list(callback.message, telegram_user=callback.from_user)
+
     @router.callback_query(F.data == "materials:podcasts")
     async def materials_podcasts_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
         await upsert_telegram_user(callback.from_user)
         await callback.answer()
         if not callback.message:
             return
-        has_podcast = await send_program_media(callback.message, media_type="podcast", title="Подкасты на основе занятий:")
-        if has_podcast:
-            return
-        await callback.message.answer(
-            "Аудиоподкасты пока не загружены. Пока могу сделать текстовую подкаст-выжимку по материалам."
-        )
-        await answer_question(
+        await show_media_picker(
             callback.message,
-            "Сделай короткий текстовый подкаст-конспект по материалам занятий сезона 1. "
-            "Формат: 5 ключевых мыслей, практический вывод, что попробовать на работе.",
-            state,
-            mode="materials_podcast_summary",
-            telegram_user=callback.from_user,
+            media_type="podcast",
+            title="Выбери подкаст:",
+            empty_text="Аудиоподкасты пока не загружены. Могу сделать текстовую подкаст-выжимку по материалам.",
+            empty_reply_markup=podcast_empty_keyboard(),
         )
-        await state.clear()
+
+    @router.callback_query(F.data == "materials:podcast_text")
+    async def materials_podcast_text_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
+        await upsert_telegram_user(callback.from_user)
+        await callback.answer()
+        if callback.message:
+            await send_podcast_text_summary(callback.message, state, telegram_user=callback.from_user)
 
     @router.callback_query(F.data == "materials:summary")
     async def materials_summary_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
@@ -1594,6 +1625,34 @@ def build_main_router(container: AppContainer) -> Router:
             telegram_user=callback.from_user,
         )
         await state.clear()
+
+    @router.callback_query(F.data.startswith("media:"))
+    async def media_send_callback_handler(callback: CallbackQuery) -> None:
+        await upsert_telegram_user(callback.from_user)
+        await callback.answer()
+        if not callback.message or not callback.data:
+            return
+
+        parts = callback.data.split(":")
+        if len(parts) != 3:
+            await callback.message.answer("Не понял, какой файл нужно отправить.", reply_markup=user_main_menu())
+            return
+        _, media_type, media_id_raw = parts
+        try:
+            media_id = int(media_id_raw)
+        except ValueError:
+            await callback.message.answer("Не понял номер файла.", reply_markup=user_main_menu())
+            return
+
+        async with SessionLocal() as session:
+            media = await ProgramMediaRepository.get_by_id(session, media_id)
+
+        if media is None or media.media_type != media_type:
+            await callback.message.answer("Этот файл не найден. Возможно, админ загрузит его заново.", reply_markup=user_main_menu())
+            return
+
+        await send_media_asset(callback.message, media)
+        await callback.message.answer("Если хочешь продолжить, выбери действие:", reply_markup=user_main_menu())
 
     @router.message(F.text == "Сезон 1. Бизнес-консалтинг")
     async def materials_season_handler(message: Message) -> None:
@@ -1630,18 +1689,13 @@ def build_main_router(container: AppContainer) -> Router:
     @router.message(F.text == "Подкасты на основе занятий")
     async def materials_podcasts_handler(message: Message, state: FSMContext) -> None:
         await ensure_user(message)
-        has_podcast = await send_program_media(message, media_type="podcast", title="Подкасты на основе занятий:")
-        if has_podcast:
-            return
-        await message.answer(PODCASTS_PROMPT)
-        await answer_question(
+        await show_media_picker(
             message,
-            "Сделай короткий текстовый подкаст-конспект по материалам занятий сезона 1. "
-            "Формат: 5 ключевых мыслей, практический вывод, что попробовать на работе.",
-            state,
-            mode="materials_podcast_summary",
+            media_type="podcast",
+            title="Выбери подкаст:",
+            empty_text=PODCASTS_PROMPT,
+            empty_reply_markup=podcast_empty_keyboard(),
         )
-        await state.clear()
 
     @router.message(F.text == "Саммари занятий")
     async def materials_summary_handler(message: Message, state: FSMContext) -> None:

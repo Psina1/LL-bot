@@ -210,6 +210,32 @@ def materials_program_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _media_button_title(media) -> str:
+    module_prefix = f"Модуль {media.module_number}: " if getattr(media, "module_number", None) else ""
+    title = f"{module_prefix}{media.title}"
+    return title if len(title) <= 58 else f"{title[:55]}..."
+
+
+def media_list_keyboard(media_items, media_type: str, include_docs_button: bool = False) -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton(text=_media_button_title(media), callback_data=f"media:{media_type}:{media.id}")]
+        for media in media_items[:20]
+    ]
+    if include_docs_button:
+        keyboard.append([InlineKeyboardButton(text="Текстовые материалы", callback_data="materials:docs")])
+    keyboard.append([InlineKeyboardButton(text="Главное меню", callback_data="menu:main")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def podcast_empty_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Сделать текстовую подкаст-выжимку", callback_data="materials:podcast_text")],
+            [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
+        ]
+    )
+
+
 def start_notification_time_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

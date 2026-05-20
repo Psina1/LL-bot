@@ -636,6 +636,11 @@ class ProgramMediaRepository:
         return list(result.scalars().all())
 
     @staticmethod
+    async def get_by_id(session: AsyncSession, media_id: int) -> ProgramMedia | None:
+        result = await session.execute(select(ProgramMedia).where(ProgramMedia.id == media_id))
+        return result.scalar_one_or_none()
+
+    @staticmethod
     async def list_latest(session: AsyncSession, limit: int = 50) -> list[ProgramMedia]:
         result = await session.execute(select(ProgramMedia).order_by(ProgramMedia.created_at.desc()).limit(limit))
         return list(result.scalars().all())
