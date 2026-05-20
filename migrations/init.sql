@@ -112,6 +112,22 @@ CREATE TABLE IF NOT EXISTS app_settings (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS homeworks (
+    id SERIAL PRIMARY KEY,
+    title VARCHAR(500) NOT NULL,
+    description TEXT,
+    document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+    moodle_url TEXT,
+    module_number INTEGER,
+    module_title VARCHAR(255),
+    lesson_key VARCHAR(100),
+    lesson_date DATE,
+    status VARCHAR(50) NOT NULL DEFAULT 'active',
+    created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS program_media (
     id SERIAL PRIMARY KEY,
     title VARCHAR(500) NOT NULL,
@@ -150,6 +166,10 @@ CREATE INDEX IF NOT EXISTS ix_user_notification_settings_user_id ON user_notific
 CREATE INDEX IF NOT EXISTS ix_notification_deliveries_user_id ON notification_deliveries(user_id);
 CREATE INDEX IF NOT EXISTS ix_user_files_user_id ON user_files(user_id);
 CREATE INDEX IF NOT EXISTS ix_user_files_document_id ON user_files(document_id);
+CREATE INDEX IF NOT EXISTS ix_homeworks_lesson_key ON homeworks(lesson_key);
+CREATE INDEX IF NOT EXISTS ix_homeworks_lesson_date ON homeworks(lesson_date);
+CREATE INDEX IF NOT EXISTS ix_homeworks_status ON homeworks(status);
+CREATE INDEX IF NOT EXISTS ix_homeworks_document_id ON homeworks(document_id);
 CREATE INDEX IF NOT EXISTS ix_program_media_type_created_at ON program_media(media_type, created_at);
 CREATE INDEX IF NOT EXISTS ix_program_media_module_number ON program_media(module_number);
 CREATE INDEX IF NOT EXISTS ix_program_media_lesson_key ON program_media(lesson_key);

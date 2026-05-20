@@ -5,6 +5,7 @@ import random
 import re
 import time
 from datetime import date, datetime, timedelta, timezone
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from app.bot.keyboards.reply import (
     admin_material_module_keyboard,
     admin_material_season_keyboard,
     admin_material_type_keyboard,
+    admin_homework_link_keyboard,
     admin_lesson_date_keyboard,
     admin_media_module_keyboard,
     admin_media_type_keyboard,
@@ -67,6 +69,7 @@ from app.db.repositories import (
     ErrorRepository,
     MessageFeedbackRepository,
     MessageRepository,
+    HomeworkRepository,
     ProgramMediaRepository,
     UserNotificationSettingRepository,
     StatsRepository,
@@ -403,6 +406,24 @@ def build_main_router(container: AppContainer) -> Router:
     def format_lesson_date(value: date | None) -> str:
         return value.strftime("%d.%m.%Y") if value else "без даты"
 
+    def normalize_homework_link(text_value: str | None) -> str | None:
+        text = (text_value or "").strip()
+        if not text or text.lower() in {"ссылка: без ссылки", "без ссылки", "нет", "-"}:
+            return None
+        if not re.match(r"^https?://", text, flags=re.IGNORECASE):
+            raise ValueError("invalid_homework_link")
+        return text
+
+    def homework_lesson_label(homework) -> str:
+        parts = []
+        if homework.module_number:
+            parts.append(f"урок/модуль {homework.module_number}")
+        elif homework.lesson_key:
+            parts.append(homework.lesson_key)
+        if homework.lesson_date:
+            parts.append(format_lesson_date(homework.lesson_date))
+        return ", ".join(parts) or "без привязки"
+
     def extract_material_lookup(text_value: str | None) -> dict[str, Any] | None:
         text = (text_value or "").strip().lower()
         if not text:
@@ -422,6 +443,9 @@ def build_main_router(container: AppContainer) -> Router:
                 "урок",
                 "заняти",
                 "модул",
+                "дз",
+                "домаш",
+                "задани",
             ]
         )
         if not has_material_intent:
@@ -664,6 +688,12 @@ def build_main_router(container: AppContainer) -> Router:
                 lesson_date=lookup.get("lesson_date"),
                 limit=20,
             )
+            homeworks = await HomeworkRepository.list_by_lesson(
+                session=session,
+                lesson_key=lookup.get("lesson_key"),
+                lesson_date=lookup.get("lesson_date"),
+                limit=20,
+            )
         finally:
             await session.close()
 
@@ -674,7 +704,7 @@ def build_main_router(container: AppContainer) -> Router:
             lookup_parts.append(f"дата {format_lesson_date(lookup['lesson_date'])}")
         lookup_text = ", ".join(lookup_parts) or "указанная привязка"
 
-        if not docs and not media_items:
+        if not docs and not media_items and not homeworks:
             await message.answer(
                 f"Я не нашёл загруженных материалов по запросу: {lookup_text}.\n\n"
                 "Возможно, материал ещё не загружен или у него не проставлена дата/привязка к уроку.",
@@ -701,6 +731,17 @@ def build_main_router(container: AppContainer) -> Router:
             )
             await message.answer("\n".join(lines), reply_markup=user_main_menu())
 
+        if homeworks:
+            lines = [
+                f"Нашёл домашние задания: {lookup_text}.",
+                "",
+            ]
+            for homework in homeworks[:20]:
+                lines.append(f"- id={homework.id} | {homework.title} | {homework_lesson_label(homework)}")
+            lines.append("")
+            lines.append("Выбери нужное задание кнопкой ниже.")
+            await message.answer("\n".join(lines), reply_markup=homework_list_keyboard(homeworks))
+
         videos = [media for media in media_items if media.media_type == "video"]
         podcasts = [media for media in media_items if media.media_type == "podcast"]
         if videos:
@@ -713,7 +754,7 @@ def build_main_router(container: AppContainer) -> Router:
                 f"Нашёл подкасты: {lookup_text}. Выбери нужный файл:",
                 reply_markup=media_list_keyboard(podcasts, media_type="podcast"),
             )
-        if not docs and (videos or podcasts):
+        if not docs and not homeworks and (videos or podcasts):
             await message.answer("После просмотра можно вернуться в главное меню.", reply_markup=user_main_menu())
         return True
 
@@ -792,35 +833,52 @@ def build_main_router(container: AppContainer) -> Router:
 
     async def send_homework_list(message: Message) -> None:
         async with SessionLocal() as session:
-            docs = await DocumentRepository.list_homework_materials(session)
-        lines = [
-            "Список домашних заданий:",
-            "",
-            "- ДЗ №1",
-        ]
-        if docs:
-            lines.extend(["", "Дополнительные материалы по домашним заданиям:"])
-            for doc in docs[:10]:
-                date_text = format_lesson_date(doc.lesson_date)
-                lines.append(f"- id={doc.id} | {doc.title} | {date_text}")
-            lines.extend(
-                [
-                    "",
-                    "Чтобы спросить по конкретному файлу, можно написать:",
-                    f"материал {docs[0].id}: что нужно сделать?",
-                ]
+            homeworks = await HomeworkRepository.list_active(session)
+
+        if not homeworks:
+            await message.answer(
+                "Домашние задания пока не добавлены.\n\n"
+                "Когда администратор загрузит файл как `Тип: домашнее задание`, он появится здесь.",
+                reply_markup=homework_list_keyboard([]),
+                parse_mode=None,
             )
-        lines.extend(["", "Выбери задание или задай свой вопрос по домашке."])
-        await message.answer("\n".join(lines), reply_markup=homework_list_keyboard())
+            return
 
-    async def send_homework_1(message: Message) -> None:
-        homework_text = await get_bot_text("homework_1")
-        await message.answer(homework_text, reply_markup=homework_detail_keyboard())
+        lines = ["Список домашних заданий:", ""]
+        for homework in homeworks[:20]:
+            lines.append(f"- id={homework.id} | {homework.title} | {homework_lesson_label(homework)}")
+        lines.extend(["", "Выбери задание кнопкой ниже или задай свой вопрос по домашке."])
+        await message.answer("\n".join(lines), reply_markup=homework_list_keyboard(homeworks))
 
-    async def start_homework_help(message: Message, state: FSMContext) -> None:
+    async def send_homework_item(message: Message, homework_id: int) -> None:
+        async with SessionLocal() as session:
+            homework = await HomeworkRepository.get_by_id(session, homework_id)
+
+        if homework is None or homework.status != "active":
+            await message.answer("Не нашёл такое домашнее задание. Показываю список актуальных заданий.")
+            await send_homework_list(message)
+            return
+
+        lines = [
+            f"Домашнее задание: {escape(homework.title)}",
+            f"Привязка: {escape(homework_lesson_label(homework))}",
+        ]
+        if homework.description:
+            lines.extend(["", escape(homework.description)])
+        if homework.moodle_url:
+            lines.extend(["", f"Ссылка для сдачи: {escape(homework.moodle_url)}"])
+        if homework.document_id:
+            lines.extend(["", f"Файл задания сохранён как материал id={homework.document_id}."])
+        await message.answer("\n".join(lines), reply_markup=homework_detail_keyboard(homework.id))
+
+    async def start_homework_help(message: Message, state: FSMContext, homework_id: int | None = None) -> None:
         await state.set_state(UserFlow.waiting_for_homework_help_question)
+        await state.update_data(selected_homework_id=homework_id)
+        suffix = ""
+        if homework_id:
+            suffix = f"\n\nЯ буду учитывать домашнее задание id={homework_id}."
         await message.answer(
-            HOMEWORK_HELP_PROMPT,
+            f"{HOMEWORK_HELP_PROMPT}{suffix}",
             reply_markup=user_main_menu(),
         )
 
@@ -1026,20 +1084,33 @@ def build_main_router(container: AppContainer) -> Router:
         if callback.message:
             await send_homework_list(callback.message)
 
-    @router.callback_query(F.data == "homework:hw1")
-    async def homework_1_callback_handler(callback: CallbackQuery) -> None:
+    @router.callback_query(F.data.startswith("homework:item:"))
+    async def homework_item_callback_handler(callback: CallbackQuery) -> None:
         await upsert_telegram_user(callback.from_user)
         await callback.answer()
+        try:
+            homework_id = int((callback.data or "").split(":")[-1])
+        except ValueError:
+            if callback.message:
+                await callback.message.answer("Не понял, какое домашнее задание открыть.")
+            return
         if callback.message:
-            await send_homework_1(callback.message)
+            await send_homework_item(callback.message, homework_id)
 
-    @router.callback_query(F.data == "homework:help")
+    @router.callback_query(F.data.startswith("homework:help"))
     async def homework_help_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
         await upsert_telegram_user(callback.from_user)
         await state.clear()
         await callback.answer()
+        homework_id = None
+        parts = (callback.data or "").split(":")
+        if len(parts) == 3:
+            try:
+                homework_id = int(parts[2])
+            except ValueError:
+                homework_id = None
         if callback.message:
-            await start_homework_help(callback.message, state)
+            await start_homework_help(callback.message, state, homework_id=homework_id)
 
     @router.callback_query(F.data.startswith("start_notification_time:"))
     async def start_notification_time_callback_handler(callback: CallbackQuery) -> None:
@@ -1317,6 +1388,16 @@ def build_main_router(container: AppContainer) -> Router:
         lesson_date = date.fromisoformat(lesson_date_raw) if lesson_date_raw else None
         module_text = f"урок/модуль {module_number}" if module_number else "общий материал"
         type_text = message.text.replace("Тип: ", "")
+        if material_type == "homework":
+            await state.set_state(AdminFlow.waiting_for_homework_link)
+            await message.answer(
+                "Шаг 5 из 6: пришли ссылку на Moodle/ПРОГРЕСС для сдачи домашнего задания.\n\n"
+                "Если ссылки пока нет, нажми «Ссылка: без ссылки».",
+                reply_markup=admin_homework_link_keyboard(),
+                parse_mode=None,
+            )
+            return
+
         await state.set_state(AdminFlow.waiting_for_global_file)
         await message.answer(
             "Шаг 5 из 5: пришли файл PDF/DOCX/PPTX/TXT.\n\n"
@@ -1331,6 +1412,47 @@ def build_main_router(container: AppContainer) -> Router:
     @router.message(AdminFlow.waiting_for_material_type)
     async def admin_material_type_invalid_handler(message: Message) -> None:
         await message.answer("Выбери тип материала кнопкой ниже или нажми «Админ: меню».", reply_markup=admin_material_type_keyboard())
+
+    @router.message(AdminFlow.waiting_for_homework_link, F.text)
+    async def admin_homework_link_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        if message.text == "Админ: меню":
+            await state.clear()
+            await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
+            return
+        try:
+            moodle_url = normalize_homework_link(message.text)
+        except ValueError:
+            await message.answer(
+                "Ссылка должна начинаться с `https://` или `http://`. "
+                "Если ссылки пока нет, нажми «Ссылка: без ссылки».",
+                reply_markup=admin_homework_link_keyboard(),
+                parse_mode=None,
+            )
+            return
+
+        await state.update_data(homework_moodle_url=moodle_url)
+        data = await state.get_data()
+        season_title = data.get("material_season_title") or "без сезона"
+        module_number = data.get("material_module_number")
+        lesson_date_raw = data.get("material_lesson_date")
+        lesson_date = date.fromisoformat(lesson_date_raw) if lesson_date_raw else None
+        module_text = f"урок/модуль {module_number}" if module_number else "общий материал"
+        link_text = moodle_url or "без ссылки"
+        await state.set_state(AdminFlow.waiting_for_global_file)
+        await message.answer(
+            "Шаг 6 из 6: пришли файл PDF/DOCX/PPTX/TXT с домашним заданием.\n\n"
+            f"Будет сохранено так:\n"
+            f"- сезон: {season_title}\n"
+            f"- привязка: {module_text}\n"
+            f"- дата: {format_lesson_date(lesson_date)}\n"
+            f"- тип: домашнее задание\n"
+            f"- ссылка: {link_text}",
+            reply_markup=admin_menu_keyboard(),
+            parse_mode=None,
+        )
 
     @router.message(F.text == "Админ: загрузить медиа")
     async def admin_media_upload_start_handler(message: Message, state: FSMContext) -> None:
@@ -1507,7 +1629,8 @@ def build_main_router(container: AppContainer) -> Router:
         async with SessionLocal() as session:
             docs = await DocumentRepository.list_materials(session, limit=100)
             media_items = await ProgramMediaRepository.list_latest(session, limit=30)
-        if not docs and not media_items:
+            homeworks = await HomeworkRepository.list_active(session, limit=30)
+        if not docs and not media_items and not homeworks:
             await message.answer("Материалы и медиа пока не загружены.")
             return
 
@@ -1529,6 +1652,14 @@ def build_main_router(container: AppContainer) -> Router:
                 lines.append(
                     f"- media id={media.id} | {media.title} | type={media.media_type} | "
                     f"lesson={lesson_text} | date={date_text}"
+                )
+        if homeworks:
+            lines.append("")
+            lines.append("Домашние задания:")
+            for homework in homeworks[:20]:
+                lines.append(
+                    f"- homework id={homework.id} | {homework.title} | {homework_lesson_label(homework)} | "
+                    f"document_id={homework.document_id or 'none'}"
                 )
         await message.answer("\n".join(lines))
 
@@ -1566,6 +1697,7 @@ def build_main_router(container: AppContainer) -> Router:
             f"- Пользователей: {totals['users']}",
             f"- С проектным контекстом: {totals['users_with_project_context']}",
             f"- Документов всего: {totals['documents']}",
+            f"- Домашних заданий: {totals['active_homeworks']}",
             f"- Общих материалов: {totals['global_documents']}",
             f"- Личных файлов: {totals['user_documents']}",
             f"- Пользовательских загрузок: {totals['user_files']}",
@@ -1771,7 +1903,6 @@ def build_main_router(container: AppContainer) -> Router:
                 "Изменить приветствие",
                 "Изменить помощь",
                 "Изменить расписание",
-                "Изменить ДЗ №1",
                 "Изменить текст уведомления",
             ]
         )
@@ -1783,7 +1914,6 @@ def build_main_router(container: AppContainer) -> Router:
             "Изменить приветствие": "welcome",
             "Изменить помощь": "help",
             "Изменить расписание": "schedule",
-            "Изменить ДЗ №1": "homework_1",
             "Изменить текст уведомления": NOTIFICATION_TEXT_KEY,
         }
         key = mapping[message.text]
@@ -2087,11 +2217,6 @@ def build_main_router(container: AppContainer) -> Router:
         await ensure_user(message)
         await send_homework_list(message)
 
-    @router.message(F.text == "ДЗ №1")
-    async def homework_1_text_handler(message: Message) -> None:
-        await ensure_user(message)
-        await send_homework_1(message)
-
     @router.message(F.text == "Помощь с домашкой")
     async def homework_help_prompt_handler(message: Message, state: FSMContext) -> None:
         await ensure_user(message)
@@ -2238,19 +2363,47 @@ def build_main_router(container: AppContainer) -> Router:
             await state.clear()
             return
 
-        homework_text = await get_bot_text("homework_1")
+        data = await state.get_data()
+        selected_homework_id = data.get("selected_homework_id")
+        async with SessionLocal() as session:
+            if selected_homework_id:
+                homework = await HomeworkRepository.get_by_id(session, int(selected_homework_id))
+                homeworks = [homework] if homework and homework.status == "active" else []
+            else:
+                homeworks = await HomeworkRepository.list_active(session, limit=10)
+
+        if homeworks:
+            homework_blocks = []
+            for homework in homeworks:
+                block_lines = [
+                    f"id={homework.id}",
+                    f"название: {homework.title}",
+                    f"привязка: {homework_lesson_label(homework)}",
+                ]
+                if homework.description:
+                    block_lines.append(f"описание: {homework.description}")
+                if homework.moodle_url:
+                    block_lines.append(f"ссылка для сдачи: {homework.moodle_url}")
+                if homework.document_id:
+                    block_lines.append(f"связанный материал/document_id: {homework.document_id}")
+                homework_blocks.append("\n".join(block_lines))
+            homework_context = "\n\n".join(homework_blocks)
+        else:
+            homework_context = "Домашние задания пока не добавлены в базу."
+
         extra_context = (
             "Раздел: помощь с домашним заданием.\n"
-            "Используй описание ДЗ №1 ниже как основной контекст. "
-            "Если в описании нет точного ответа, скажи об этом и предложи уточнить вопрос у организаторов.\n\n"
-            f"Описание ДЗ №1:\n{homework_text}"
+            "Используй список домашних заданий ниже как основной контекст. "
+            "Если точного ответа нет в описании ДЗ или загруженных материалах, скажи об этом "
+            "и предложи уточнить вопрос у организаторов.\n\n"
+            f"Домашние задания из базы:\n{homework_context}"
         )
         await answer_question(
             message,
             message.text,
             state,
             mode="homework_help",
-            force_rag=False,
+            force_rag=True,
             extra_context=extra_context,
         )
         await state.clear()
@@ -2333,6 +2486,7 @@ def build_main_router(container: AppContainer) -> Router:
             material_type = material_type_from_state or caption_metadata.get("material_type")
             if material_type is None and "material_type" not in state_data and "домаш" in (document.file_name or "").lower():
                 material_type = "homework"
+            moodle_url = state_data.get("homework_moodle_url")
             tags = build_content_tags(
                 lesson_key=lesson_key,
                 module_number=module_number,
@@ -2363,16 +2517,37 @@ def build_main_router(container: AppContainer) -> Router:
                 material_type=material_type,
                 tags=tags,
             )
+            homework = None
+            if material_type == "homework":
+                homework = await HomeworkRepository.create(
+                    session=session,
+                    title=document.file_name.rsplit(".", 1)[0],
+                    description=(message.caption or "").strip() or None,
+                    document_id=indexed_document.id,
+                    moodle_url=moodle_url,
+                    module_number=module_number,
+                    module_title=module_title,
+                    lesson_key=lesson_key,
+                    lesson_date=lesson_date,
+                    created_by_user_id=user.id,
+                )
             module_text = f"урок/модуль {module_number}" if module_number else "общий материал"
             type_text = material_type or "другое"
+            homework_line = ""
+            link_line = ""
+            if homework is not None:
+                homework_line = f"- домашнее задание id: {homework.id}\n"
+                link_line = f"- ссылка: {moodle_url or 'без ссылки'}\n"
             await message.answer(
                 "Материал загружен и обработан.\n\n"
                 f"- id: {indexed_document.id}\n"
+                f"{homework_line}"
                 f"- файл: {document.file_name}\n"
                 f"- формат: {extension}\n"
                 f"- привязка: {module_text}\n"
                 f"- дата: {format_lesson_date(lesson_date)}\n"
                 f"- тип: {type_text}\n"
+                f"{link_line}"
                 f"- теги: {', '.join(tags)}\n"
                 "- видимость: общий материал программы\n\n"
                 f"Чтобы спросить именно по этому файлу, напиши: материал {indexed_document.id}: твой вопрос",

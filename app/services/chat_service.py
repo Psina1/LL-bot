@@ -70,7 +70,7 @@ class ChatService:
                 sources = fallback_context.sources
 
         user_context_block = project_context.strip() if project_context else "Нет"
-        if force_rag and not context_text:
+        if force_rag and not context_text and not extra_context:
             answer_text = (
                 "В загруженных материалах я не нашёл точного ответа на этот вопрос.\n\n"
                 "Если вопрос срочный или организационный, задай его в общий чат программы или напиши организаторам."

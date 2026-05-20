@@ -72,7 +72,6 @@ ADMIN_TEXTS_BUTTONS = [
     [KeyboardButton(text="Изменить приветствие")],
     [KeyboardButton(text="Изменить помощь")],
     [KeyboardButton(text="Изменить расписание")],
-    [KeyboardButton(text="Изменить ДЗ №1")],
     [KeyboardButton(text="Изменить текст уведомления")],
     [KeyboardButton(text="Админ: меню")],
 ]
@@ -104,6 +103,11 @@ ADMIN_MATERIAL_TYPE_BUTTONS = [
 
 ADMIN_LESSON_DATE_BUTTONS = [
     [KeyboardButton(text="Дата: без даты")],
+    [KeyboardButton(text="Админ: меню")],
+]
+
+ADMIN_HOMEWORK_LINK_BUTTONS = [
+    [KeyboardButton(text="Ссылка: без ссылки")],
     [KeyboardButton(text="Админ: меню")],
 ]
 
@@ -179,6 +183,10 @@ def admin_lesson_date_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=ADMIN_LESSON_DATE_BUTTONS, resize_keyboard=True)
 
 
+def admin_homework_link_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=ADMIN_HOMEWORK_LINK_BUTTONS, resize_keyboard=True)
+
+
 def admin_media_type_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=ADMIN_MEDIA_TYPE_BUTTONS, resize_keyboard=True)
 
@@ -230,20 +238,21 @@ def homework_program_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def homework_list_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="ДЗ №1", callback_data="homework:hw1")],
-            [InlineKeyboardButton(text="Задай свой вопрос по заданию", callback_data="homework:help")],
-            [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
-        ]
-    )
+def homework_list_keyboard(homeworks=None) -> InlineKeyboardMarkup:
+    keyboard = []
+    for homework in (homeworks or [])[:20]:
+        title = homework.title if len(homework.title) <= 54 else f"{homework.title[:51]}..."
+        keyboard.append([InlineKeyboardButton(text=title, callback_data=f"homework:item:{homework.id}")])
+    keyboard.append([InlineKeyboardButton(text="Задай свой вопрос по заданию", callback_data="homework:help")])
+    keyboard.append([InlineKeyboardButton(text="Главное меню", callback_data="menu:main")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def homework_detail_keyboard() -> InlineKeyboardMarkup:
+def homework_detail_keyboard(homework_id: int | None = None) -> InlineKeyboardMarkup:
+    help_callback = f"homework:help:{homework_id}" if homework_id else "homework:help"
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Задай свой вопрос по заданию", callback_data="homework:help")],
+            [InlineKeyboardButton(text="Задай свой вопрос по заданию", callback_data=help_callback)],
             [InlineKeyboardButton(text="К списку заданий", callback_data="homework:list")],
             [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
         ]

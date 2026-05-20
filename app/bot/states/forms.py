@@ -17,6 +17,7 @@ class AdminFlow(StatesGroup):
     waiting_for_material_module = State()
     waiting_for_material_date = State()
     waiting_for_material_type = State()
+    waiting_for_homework_link = State()
     waiting_for_global_file = State()
     waiting_for_media_type = State()
     waiting_for_media_module = State()

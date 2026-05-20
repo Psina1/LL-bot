@@ -15,6 +15,7 @@ from app.db.models import (
     Document,
     DocumentStatusEnum,
     ErrorLog,
+    Homework,
     Message,
     MessageFeedback,
     NotificationDelivery,
@@ -631,6 +632,80 @@ class UserFileRepository:
         return user_file
 
 
+class HomeworkRepository:
+    @staticmethod
+    async def create(
+        session: AsyncSession,
+        title: str,
+        description: str | None = None,
+        document_id: int | None = None,
+        moodle_url: str | None = None,
+        module_number: int | None = None,
+        module_title: str | None = None,
+        lesson_key: str | None = None,
+        lesson_date=None,
+        created_by_user_id: int | None = None,
+        status: str = "active",
+    ) -> Homework:
+        homework = Homework(
+            title=title,
+            description=description,
+            document_id=document_id,
+            moodle_url=moodle_url,
+            module_number=module_number,
+            module_title=module_title,
+            lesson_key=lesson_key,
+            lesson_date=lesson_date,
+            created_by_user_id=created_by_user_id,
+            status=status,
+        )
+        session.add(homework)
+        await session.commit()
+        await session.refresh(homework)
+        return homework
+
+    @staticmethod
+    async def get_by_id(session: AsyncSession, homework_id: int) -> Homework | None:
+        result = await session.execute(select(Homework).where(Homework.id == homework_id))
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def list_active(session: AsyncSession, limit: int = 50) -> list[Homework]:
+        stmt = (
+            select(Homework)
+            .where(Homework.status == "active")
+            .order_by(Homework.module_number.asc().nulls_last(), Homework.lesson_date.asc().nulls_last(), Homework.id.asc())
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def list_by_lesson(
+        session: AsyncSession,
+        lesson_key: str | None = None,
+        lesson_date=None,
+        limit: int = 20,
+    ) -> list[Homework]:
+        if lesson_key and lesson_date:
+            lesson_filter = and_(Homework.lesson_key == lesson_key, Homework.lesson_date == lesson_date)
+        elif lesson_key:
+            lesson_filter = Homework.lesson_key == lesson_key
+        elif lesson_date:
+            lesson_filter = Homework.lesson_date == lesson_date
+        else:
+            return []
+
+        stmt = (
+            select(Homework)
+            .where(and_(Homework.status == "active", lesson_filter))
+            .order_by(Homework.module_number.asc().nulls_last(), Homework.lesson_date.asc().nulls_last(), Homework.id.asc())
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+
 class ProgramMediaRepository:
     @staticmethod
     async def create(
@@ -723,11 +798,13 @@ class StatsRepository:
     async def totals(session: AsyncSession) -> dict[str, int]:
         users_count = int((await session.execute(select(func.count(User.id)))).scalar() or 0)
         documents_count = int((await session.execute(select(func.count(Document.id)))).scalar() or 0)
+        homeworks_count = int((await session.execute(select(func.count(Homework.id)))).scalar() or 0)
         chunks_count = int((await session.execute(select(func.count(Chunk.id)))).scalar() or 0)
         messages_count = int((await session.execute(select(func.count(Message.id)))).scalar() or 0)
         return {
             "users": users_count,
             "documents": documents_count,
+            "homeworks": homeworks_count,
             "chunks": chunks_count,
             "messages": messages_count,
         }
@@ -775,6 +852,10 @@ class StatsRepository:
             (await session.execute(select(func.count(Document.id)).where(Document.status == DocumentStatusEnum.error))).scalar()
             or 0
         )
+        active_homeworks = int(
+            (await session.execute(select(func.count(Homework.id)).where(Homework.status == "active"))).scalar()
+            or 0
+        )
         now = datetime.now(timezone.utc)
         messages_today = await StatsRepository.count_messages_since(session, now - timedelta(days=1))
         messages_week = await StatsRepository.count_messages_since(session, now - timedelta(days=7))
@@ -789,6 +870,7 @@ class StatsRepository:
             "ready_documents": ready_documents,
             "processing_documents": processing_documents,
             "error_documents": error_documents,
+            "active_homeworks": active_homeworks,
             "messages_today": messages_today,
             "messages_week": messages_week,
             "messages_month": messages_month,
