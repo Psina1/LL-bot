@@ -27,7 +27,6 @@ from app.bot.keyboards.reply import (
     admin_menu_keyboard,
     admin_text_preview_keyboard,
     admin_texts_keyboard,
-    feedback_keyboard,
     feedback_reason_keyboard,
     homework_detail_keyboard,
     homework_list_keyboard,
@@ -277,7 +276,11 @@ def build_main_router(container: AppContainer) -> Router:
         mime_type = None
         title_hint = None
 
-        if message.video:
+        if message.photo:
+            media = message.photo[-1]
+            telegram_kind = "photo"
+            title_hint = "Картинка"
+        elif message.video:
             media = message.video
             telegram_kind = "video"
             title_hint = "Видео занятия"
@@ -322,6 +325,8 @@ def build_main_router(container: AppContainer) -> Router:
             return kind == "video" or mime_type.startswith("video/") or filename.endswith((".mp4", ".mov", ".m4v"))
         if media_type == "podcast":
             return kind in {"audio", "voice"} or mime_type.startswith("audio/") or filename.endswith((".mp3", ".m4a", ".wav", ".ogg"))
+        if media_type == "image":
+            return kind == "photo" or mime_type.startswith("image/") or filename.endswith((".jpg", ".jpeg", ".png", ".webp"))
         return False
 
     def lesson_payload(prefix: str, season_title: str | None, text_value: str) -> dict[str, Any]:
@@ -562,6 +567,9 @@ def build_main_router(container: AppContainer) -> Router:
         mode: str = "training_qa",
         force_rag: bool = True,
         extra_context: str | None = None,
+        lesson_key: str | None = None,
+        lesson_date: date | None = None,
+        document_ids: list[int] | None = None,
         telegram_user=None,
     ) -> None:
         user, session = await get_user_and_session(message, telegram_user=telegram_user)
@@ -581,8 +589,11 @@ def build_main_router(container: AppContainer) -> Router:
                 mode=mode,
                 force_rag=force_rag,
                 extra_context=extra_context,
+                lesson_key=lesson_key,
+                lesson_date=lesson_date,
+                document_ids=document_ids,
             )
-            await message.answer(result.text, reply_markup=feedback_keyboard(result.message_id))
+            await message.answer(result.text)
             await message.answer("Если хочешь продолжить, выбери действие:", reply_markup=user_main_menu())
             await state.update_data(last_question=question, last_answer=result.text)
         except Exception as exc:
@@ -621,7 +632,7 @@ def build_main_router(container: AppContainer) -> Router:
                 question=question,
                 document_id=document_id,
             )
-            await message.answer(result.text, reply_markup=feedback_keyboard(result.message_id))
+            await message.answer(result.text)
             await message.answer("Если хочешь продолжить, выбери действие:", reply_markup=user_main_menu())
             await state.update_data(last_question=question, last_answer=result.text)
         except Exception as exc:
@@ -774,6 +785,9 @@ def build_main_router(container: AppContainer) -> Router:
                 return
             if media.telegram_kind == "voice":
                 await message.answer_voice(voice=media.telegram_file_id, caption=caption, parse_mode=None)
+                return
+            if media.telegram_kind == "photo":
+                await message.answer_photo(photo=media.telegram_file_id, caption=caption, parse_mode=None)
                 return
             await message.answer_document(document=media.telegram_file_id, caption=caption, parse_mode=None)
         except TelegramBadRequest:
@@ -1141,6 +1155,17 @@ def build_main_router(container: AppContainer) -> Router:
         if section not in {"program", "technical", "other"}:
             await callback.answer("Не понял раздел вопроса.")
             return
+        if section == "technical":
+            await state.clear()
+            await callback.answer()
+            if callback.message:
+                await callback.message.answer(
+                    "По техническим вопросам лучше сразу написать Илье в Telegram: @reptiloid0.\n\n"
+                    "Он поможет с доступом, платформой ПРОГРЕСС, Moodle, записями занятий, "
+                    "загрузкой домашних заданий и ошибками в работе бота.",
+                    reply_markup=user_main_menu(),
+                )
+            return
         await state.set_state(UserFlow.waiting_for_categorized_question)
         await state.update_data(question_section=section)
         await callback.answer()
@@ -1465,17 +1490,22 @@ def build_main_router(container: AppContainer) -> Router:
             reply_markup=admin_media_type_keyboard(),
         )
 
-    @router.message(AdminFlow.waiting_for_media_type, F.text.in_(["Медиа: видео", "Медиа: подкаст"]))
+    @router.message(AdminFlow.waiting_for_media_type, F.text.in_(["Медиа: видео", "Медиа: подкаст", "Медиа: картинка"]))
     async def admin_media_type_handler(message: Message, state: FSMContext) -> None:
         if not await require_admin(message):
             await state.clear()
             return
-        media_type = "video" if message.text == "Медиа: видео" else "podcast"
+        media_type_by_button = {
+            "Медиа: видео": "video",
+            "Медиа: подкаст": "podcast",
+            "Медиа: картинка": "image",
+        }
+        media_type = media_type_by_button[message.text]
         await state.update_data(media_type=media_type)
         await state.set_state(AdminFlow.waiting_for_media_module)
         await message.answer(
             "Шаг 2 из 4: выбери привязку медиа.\n\n"
-            "Это нужно, чтобы видео или подкаст относились к конкретному уроку/модулю либо были общими.",
+            "Это нужно, чтобы видео, подкаст или картинка относились к конкретному уроку/модулю либо были общими.",
             reply_markup=admin_media_module_keyboard(),
         )
 
@@ -1525,7 +1555,12 @@ def build_main_router(container: AppContainer) -> Router:
         data = await state.get_data()
         media_type = data.get("media_type")
         module_number = data.get("media_module_number")
-        type_text = "видео" if media_type == "video" else "аудиоподкаст"
+        type_text_by_media = {
+            "video": "видео",
+            "podcast": "аудиоподкаст",
+            "image": "картинка",
+        }
+        type_text = type_text_by_media.get(media_type, "медиафайл")
         module_text = f"урок/модуль {module_number}" if module_number else "общий материал"
         await message.answer(
             "Шаг 4 из 4: пришли файл в Telegram.\n\n"
@@ -1559,7 +1594,7 @@ def build_main_router(container: AppContainer) -> Router:
 
         payload = extract_media_payload(message)
         if payload is None:
-            await message.answer("Пришли видео, аудио или файл-документ.", reply_markup=admin_menu_keyboard())
+            await message.answer("Пришли видео, аудио, картинку или файл-документ.", reply_markup=admin_menu_keyboard())
             return
 
         state_data = await state.get_data()
@@ -1569,13 +1604,18 @@ def build_main_router(container: AppContainer) -> Router:
         lesson_key = state_data.get("media_lesson_key")
         lesson_date_raw = state_data.get("media_lesson_date")
         lesson_date = date.fromisoformat(lesson_date_raw) if lesson_date_raw else None
-        if media_type not in {"video", "podcast"}:
+        if media_type not in {"video", "podcast", "image"}:
             await message.answer("Не понял тип медиа. Начни заново через «Админ: загрузить медиа».", reply_markup=admin_menu_keyboard())
             await state.clear()
             return
 
         if not media_payload_matches_type(payload, media_type):
-            expected = "видео" if media_type == "video" else "аудиофайл"
+            expected_by_media = {
+                "video": "видео",
+                "podcast": "аудиофайл",
+                "image": "картинку",
+            }
+            expected = expected_by_media.get(media_type, "медиафайл")
             await message.answer(f"Ожидал {expected}. Пришли правильный файл или начни заново.", reply_markup=admin_menu_keyboard())
             return
 
@@ -1606,7 +1646,12 @@ def build_main_router(container: AppContainer) -> Router:
                 created_by_user_id=user.id,
             )
 
-        type_text = "видео" if media_type == "video" else "подкаст"
+        type_text_by_media = {
+            "video": "видео",
+            "podcast": "подкаст",
+            "image": "картинка",
+        }
+        type_text = type_text_by_media.get(media_type, "медиа")
         module_text = f"урок/модуль {module_number}" if module_number else "общий материал"
         await message.answer(
             "Медиафайл сохранён.\n\n"
@@ -2108,6 +2153,19 @@ def build_main_router(container: AppContainer) -> Router:
         if callback.message:
             await send_podcast_text_summary(callback.message, state, telegram_user=callback.from_user)
 
+    @router.callback_query(F.data == "materials:images")
+    async def materials_images_callback_handler(callback: CallbackQuery) -> None:
+        await upsert_telegram_user(callback.from_user)
+        await callback.answer()
+        if not callback.message:
+            return
+        await show_media_picker(
+            callback.message,
+            media_type="image",
+            title="Выбери картинку или схему:",
+            empty_text="Картинки и схемы пока не загружены.",
+        )
+
     @router.callback_query(F.data == "materials:summary")
     async def materials_summary_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
         await upsert_telegram_user(callback.from_user)
@@ -2117,7 +2175,7 @@ def build_main_router(container: AppContainer) -> Router:
         await answer_question(
             callback.message,
             "Сделай краткое саммари занятий сезона 1 по загруженным материалам. "
-            "Выдели основные темы, инструменты и что участнику можно применить в проекте.",
+            "Выдели основные темы, инструменты и важные выводы для участника.",
             state,
             mode="materials_summary",
             telegram_user=callback.from_user,
@@ -2195,13 +2253,23 @@ def build_main_router(container: AppContainer) -> Router:
             empty_reply_markup=podcast_empty_keyboard(),
         )
 
+    @router.message(F.text == "Картинки и схемы")
+    async def materials_images_handler(message: Message) -> None:
+        await ensure_user(message)
+        await show_media_picker(
+            message,
+            media_type="image",
+            title="Выбери картинку или схему:",
+            empty_text="Картинки и схемы пока не загружены.",
+        )
+
     @router.message(F.text == "Саммари занятий")
     async def materials_summary_handler(message: Message, state: FSMContext) -> None:
         await ensure_user(message)
         await answer_question(
             message,
             "Сделай краткое саммари занятий сезона 1 по загруженным материалам. "
-            "Выдели основные темы, инструменты и что участнику можно применить в проекте.",
+            "Выдели основные темы, инструменты и важные выводы для участника.",
             state,
             mode="materials_summary",
         )
@@ -2388,12 +2456,20 @@ def build_main_router(container: AppContainer) -> Router:
                     block_lines.append(f"связанный материал/document_id: {homework.document_id}")
                 homework_blocks.append("\n".join(block_lines))
             homework_context = "\n\n".join(homework_blocks)
+            first_homework = homeworks[0]
+            rag_lesson_key = first_homework.lesson_key if selected_homework_id else None
+            rag_lesson_date = first_homework.lesson_date if selected_homework_id else None
+            rag_document_ids = [first_homework.document_id] if selected_homework_id and first_homework.document_id else None
         else:
             homework_context = "Домашние задания пока не добавлены в базу."
+            rag_lesson_key = None
+            rag_lesson_date = None
+            rag_document_ids = None
 
         extra_context = (
             "Раздел: помощь с домашним заданием.\n"
             "Используй список домашних заданий ниже как основной контекст. "
+            "Если выбрано конкретное ДЗ, используй только материалы того же урока, модуля, даты или связанный файл. "
             "Если точного ответа нет в описании ДЗ или загруженных материалах, скажи об этом "
             "и предложи уточнить вопрос у организаторов.\n\n"
             f"Домашние задания из базы:\n{homework_context}"
@@ -2405,6 +2481,9 @@ def build_main_router(container: AppContainer) -> Router:
             mode="homework_help",
             force_rag=True,
             extra_context=extra_context,
+            lesson_key=rag_lesson_key,
+            lesson_date=rag_lesson_date,
+            document_ids=rag_document_ids,
         )
         await state.clear()
 

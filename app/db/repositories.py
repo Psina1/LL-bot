@@ -529,6 +529,66 @@ class ChunkRepository:
         return matches
 
     @staticmethod
+    async def search_relevant_by_lesson(
+        session: AsyncSession,
+        question_embedding: list[float],
+        user_id: int,
+        top_k: int,
+        lesson_key: str | None = None,
+        lesson_date: Any | None = None,
+        document_ids: list[int] | None = None,
+    ) -> list[ChunkMatch]:
+        scope_filters = []
+        if document_ids:
+            scope_filters.append(Document.id.in_(document_ids))
+        if lesson_key:
+            scope_filters.append(Document.lesson_key == lesson_key)
+        if lesson_date:
+            scope_filters.append(Document.lesson_date == lesson_date)
+
+        if not scope_filters:
+            return await ChunkRepository.search_relevant(
+                session=session,
+                question_embedding=question_embedding,
+                user_id=user_id,
+                top_k=top_k,
+            )
+
+        similarity = Chunk.embedding.cosine_distance(question_embedding)
+        stmt = (
+            select(Chunk, Document, similarity.label("distance"))
+            .join(Document, Document.id == Chunk.document_id)
+            .where(
+                and_(
+                    Document.status == DocumentStatusEnum.ready,
+                    or_(
+                        Document.visibility == VisibilityEnum.global_,
+                        and_(Document.visibility == VisibilityEnum.user, Document.owner_user_id == user_id),
+                    ),
+                    or_(*scope_filters),
+                )
+            )
+            .order_by(similarity.asc())
+            .limit(top_k)
+        )
+        result = await session.execute(stmt)
+        matches: list[ChunkMatch] = []
+        for chunk, document, distance in result.all():
+            score = 1 - float(distance)
+            matches.append(
+                ChunkMatch(
+                    chunk_id=chunk.id,
+                    chunk_text=chunk.chunk_text,
+                    score=score,
+                    metadata=chunk.chunk_metadata or {},
+                    document_id=document.id,
+                    document_title=document.title,
+                    original_filename=document.original_filename,
+                )
+            )
+        return matches
+
+    @staticmethod
     async def search_relevant_in_document(
         session: AsyncSession,
         question_embedding: list[float],

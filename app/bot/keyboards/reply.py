@@ -4,9 +4,8 @@ from app.notifications.constants import NOTIFICATION_TIME_OPTIONS
 
 
 MAIN_MENU_BUTTONS = [
-    [KeyboardButton(text="Задать вопрос")],
-    [KeyboardButton(text="Материалы программы"), KeyboardButton(text="Домашние задания")],
-    [KeyboardButton(text="Расписание Лиги Лидеров")],
+    [KeyboardButton(text="Задать вопрос"), KeyboardButton(text="Материалы программы")],
+    [KeyboardButton(text="Домашние задания"), KeyboardButton(text="Расписание Лиги Лидеров")],
     [KeyboardButton(text="Настройки уведомлений")],
 ]
 
@@ -14,8 +13,7 @@ PROJECT_CONTEXT_MENU_BUTTON = [KeyboardButton(text="Уточнить конте�
 
 
 PROJECT_CONTEXT_BUTTONS = [
-    [KeyboardButton(text="Загрузить файл с контекстом")],
-    [KeyboardButton(text="Добавить контекст текстом")],
+    [KeyboardButton(text="Загрузить файл с контекстом"), KeyboardButton(text="Добавить контекст текстом")],
     [KeyboardButton(text="Главное меню")],
 ]
 
@@ -27,9 +25,8 @@ MATERIALS_SEASON_BUTTONS = [
 
 
 MATERIALS_TYPE_BUTTONS = [
-    [KeyboardButton(text="Записи и материалы занятий")],
-    [KeyboardButton(text="Подкасты на основе занятий")],
-    [KeyboardButton(text="Саммари занятий")],
+    [KeyboardButton(text="Записи и материалы занятий"), KeyboardButton(text="Подкасты на основе занятий")],
+    [KeyboardButton(text="Саммари занятий"), KeyboardButton(text="Картинки и схемы")],
     [KeyboardButton(text="Главное меню")],
 ]
 
@@ -37,23 +34,21 @@ VIDEO_LIBRARY_BUTTON = [KeyboardButton(text="Видео занятий")]
 
 
 HOMEWORK_MENU_BUTTONS = [
-    [KeyboardButton(text="Список заданий")],
-    [KeyboardButton(text="Помощь с домашкой")],
+    [KeyboardButton(text="Список заданий"), KeyboardButton(text="Помощь с домашкой")],
     [KeyboardButton(text="Главное меню")],
 ]
 
 
 PROJECT_HELP_BUTTONS = [
-    [KeyboardButton(text="Как решить конфликтную ситуацию")],
-    [KeyboardButton(text="Сложный заказчик")],
+    [KeyboardButton(text="Как решить конфликтную ситуацию"), KeyboardButton(text="Сложный заказчик")],
     [KeyboardButton(text="Трудности с учётом финансов")],
     [KeyboardButton(text="Главное меню")],
 ]
 
 
 NOTIFICATION_SETTINGS_BUTTONS = [
-    [KeyboardButton(text=f"Уведомления: {time_value}") for time_value in NOTIFICATION_TIME_OPTIONS],
-    [KeyboardButton(text="Уведомления: отключить")],
+    [KeyboardButton(text=f"Уведомления: {time_value}") for time_value in NOTIFICATION_TIME_OPTIONS[:2]],
+    [KeyboardButton(text=f"Уведомления: {NOTIFICATION_TIME_OPTIONS[2]}"), KeyboardButton(text="Уведомления: отключить")],
     [KeyboardButton(text="Главное меню")],
 ]
 
@@ -112,8 +107,8 @@ ADMIN_HOMEWORK_LINK_BUTTONS = [
 ]
 
 ADMIN_MEDIA_TYPE_BUTTONS = [
-    [KeyboardButton(text="Медиа: видео")],
-    [KeyboardButton(text="Медиа: подкаст")],
+    [KeyboardButton(text="Медиа: видео"), KeyboardButton(text="Медиа: подкаст")],
+    [KeyboardButton(text="Медиа: картинка")],
     [KeyboardButton(text="Админ: меню")],
 ]
 
@@ -141,9 +136,15 @@ def materials_season_keyboard() -> ReplyKeyboardMarkup:
 
 
 def materials_type_keyboard(video_enabled: bool = False) -> ReplyKeyboardMarkup:
-    keyboard = [row.copy() for row in MATERIALS_TYPE_BUTTONS]
     if video_enabled:
-        keyboard.insert(1, VIDEO_LIBRARY_BUTTON)
+        keyboard = [
+            [KeyboardButton(text="Записи и материалы занятий"), VIDEO_LIBRARY_BUTTON[0]],
+            [KeyboardButton(text="Подкасты на основе занятий"), KeyboardButton(text="Саммари занятий")],
+            [KeyboardButton(text="Картинки и схемы")],
+            [KeyboardButton(text="Главное меню")],
+        ]
+    else:
+        keyboard = [row.copy() for row in MATERIALS_TYPE_BUTTONS]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
@@ -209,8 +210,10 @@ def feedback_keyboard(message_id: int) -> InlineKeyboardMarkup:
 def question_section_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Вопрос по программе", callback_data="question_section:program")],
-            [InlineKeyboardButton(text="Технический вопрос", callback_data="question_section:technical")],
+            [
+                InlineKeyboardButton(text="Вопрос по программе", callback_data="question_section:program"),
+                InlineKeyboardButton(text="Технический вопрос", callback_data="question_section:technical"),
+            ],
             [InlineKeyboardButton(text="Другое", callback_data="question_section:other")],
             [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
         ]
@@ -220,9 +223,14 @@ def question_section_keyboard() -> InlineKeyboardMarkup:
 def materials_program_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Записи и материалы занятий", callback_data="materials:records")],
-            [InlineKeyboardButton(text="Подкасты на основе занятий", callback_data="materials:podcasts")],
-            [InlineKeyboardButton(text="Саммари занятий", callback_data="materials:summary")],
+            [
+                InlineKeyboardButton(text="Записи и материалы занятий", callback_data="materials:records"),
+                InlineKeyboardButton(text="Подкасты на основе занятий", callback_data="materials:podcasts"),
+            ],
+            [
+                InlineKeyboardButton(text="Саммари занятий", callback_data="materials:summary"),
+                InlineKeyboardButton(text="Картинки и схемы", callback_data="materials:images"),
+            ],
             [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
         ]
     )
@@ -231,8 +239,10 @@ def materials_program_keyboard() -> InlineKeyboardMarkup:
 def homework_program_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Список заданий", callback_data="homework:list")],
-            [InlineKeyboardButton(text="Помощь с домашкой", callback_data="homework:help")],
+            [
+                InlineKeyboardButton(text="Список заданий", callback_data="homework:list"),
+                InlineKeyboardButton(text="Помощь с домашкой", callback_data="homework:help"),
+            ],
             [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
         ]
     )
@@ -290,8 +300,9 @@ def start_notification_time_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(text=time_value, callback_data=f"start_notification_time:{time_value}")
-                for time_value in NOTIFICATION_TIME_OPTIONS
-            ]
+                for time_value in NOTIFICATION_TIME_OPTIONS[:2]
+            ],
+            [InlineKeyboardButton(text=NOTIFICATION_TIME_OPTIONS[2], callback_data=f"start_notification_time:{NOTIFICATION_TIME_OPTIONS[2]}")],
         ]
     )
 

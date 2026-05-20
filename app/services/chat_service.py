@@ -30,6 +30,12 @@ class ChatService:
         "Если контакт в тексте разбит пробелами, восстанови его в нормальный вид: "
         "`name @ domain . ru` -> `name@domain.ru`, `@ Name` -> `@Name`."
     )
+    ANSWER_STYLE_RULE = (
+        "Обращайся к пользователю на «ты». "
+        "Не используй обязательные разделы «Коротко», «Подробнее» и «Что можно применить». "
+        "Отвечай живым языком: короткое вступление, затем обычные абзацы или список, если так понятнее. "
+        "Не добавляй блок «Источники» и не перечисляй фрагменты: источники сохраняются системой отдельно."
+    )
 
     def __init__(self, settings: Settings, llm_client: LLMClient, rag_service: RAGService) -> None:
         self.settings = settings
@@ -44,6 +50,9 @@ class ChatService:
         mode: str = "training_qa",
         force_rag: bool = True,
         extra_context: str | None = None,
+        lesson_key: str | None = None,
+        lesson_date: Any | None = None,
+        document_ids: list[int] | None = None,
     ) -> ChatAnswer:
         user_id = user.id
         project_context = user.project_context
@@ -52,11 +61,21 @@ class ChatService:
 
         if force_rag:
             try:
-                rag_context = await self.rag_service.build_context_for_question(
-                    session=session,
-                    question=question,
-                    user_id=user_id,
-                )
+                if lesson_key or lesson_date or document_ids:
+                    rag_context = await self.rag_service.build_context_for_lesson_question(
+                        session=session,
+                        question=question,
+                        user_id=user_id,
+                        lesson_key=lesson_key,
+                        lesson_date=lesson_date,
+                        document_ids=document_ids,
+                    )
+                else:
+                    rag_context = await self.rag_service.build_context_for_question(
+                        session=session,
+                        question=question,
+                        user_id=user_id,
+                    )
                 context_text = rag_context.context_text
                 sources = rag_context.sources
             except Exception as exc:
@@ -109,8 +128,7 @@ class ChatService:
                 f"Дополнительный контекст раздела:\n{extra_context or 'Нет'}\n\n"
                 f"Описание проекта пользователя:\n{user_context_block}\n\n"
                 f"{self.CONTACTS_RULE}\n"
-                "Сформируй ответ в формате: Коротко / Подробнее / Что можно применить. "
-                "Не добавляй блок «Источники» и не перечисляй фрагменты: источники сохраняются системой отдельно."
+                f"{self.ANSWER_STYLE_RULE}"
             )
         else:
             user_prompt = (
@@ -120,7 +138,7 @@ class ChatService:
                 f"Описание проекта пользователя:\n{user_context_block}\n\n"
                 "Если служебный контекст отвечает на вопрос, используй его. "
                 "Если ответа нет, прямо скажи, что точного ответа в загруженных материалах нет. "
-                "Не добавляй блок «Источники»."
+                f"{self.ANSWER_STYLE_RULE}"
             )
 
         result = await self.llm_client.chat_completion(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt)
@@ -176,8 +194,7 @@ class ChatService:
             "Ответь только на основе выбранного материала. "
             "Если в этом материале нет ответа, прямо скажи, что точного ответа в выбранном файле нет. "
             f"{self.CONTACTS_RULE}\n"
-            "Сформируй ответ в формате: Коротко / Подробнее / Что можно применить. "
-            "Не добавляй блок «Источники» и не перечисляй фрагменты: источники сохраняются системой отдельно."
+            f"{self.ANSWER_STYLE_RULE}"
         )
 
         result = await self.llm_client.chat_completion(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt)
@@ -203,7 +220,8 @@ class ChatService:
         user_id = user.id
         prompt = (
             f"Вопрос пользователя: {question}\n\n"
-            "Контекст материалов отсутствует. Ответь полезно, но добавь, что это общий ответ, не из загруженных материалов."
+            "Контекст материалов отсутствует. Ответь полезно, но добавь, что это общий ответ, не из загруженных материалов. "
+            f"{self.ANSWER_STYLE_RULE}"
         )
         result = await self.llm_client.chat_completion(system_prompt=SYSTEM_PROMPT, user_prompt=prompt)
         answer_text = self._ensure_sources_block(result.answer, [])

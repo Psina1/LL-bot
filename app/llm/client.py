@@ -72,14 +72,10 @@ class LLMClient:
     def _mock_chat_completion(self, user_prompt: str) -> ChatResult:
         question = self._extract_question(user_prompt)
         answer = (
-            "Коротко:\n"
             "Это тестовый ответ mock-режима. Бот, Telegram, БД и сценарий вопрос-ответ работают.\n\n"
-            "Подробнее:\n"
-            f"Я получил вопрос: «{question}». Когда добавим OpenAI API key и переключим "
-            "LLM_PROVIDER=openai, здесь будет реальный ответ модели по материалам.\n\n"
-            "Что можно применить:\n"
-            "Сейчас можно проверить /start, меню, права админа, сохранение сообщений и загрузку файлов.\n\n"
-            "Источники: mock-режим, реальные источники появятся после индексации материалов."
+            f"Я получил твой вопрос: «{question}». Когда включён LLM_PROVIDER=openai, "
+            "здесь будет реальный ответ модели по загруженным материалам.\n\n"
+            "Сейчас можно проверить /start, меню, права админа, сохранение сообщений и загрузку файлов."
         )
         return ChatResult(answer=answer, token_usage={"provider": "mock"})
 

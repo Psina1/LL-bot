@@ -94,6 +94,47 @@ class RAGService:
         context_text = "\n\n".join(context_blocks)
         return RAGAnswerContext(chunks=selected_chunks, context_text=context_text, sources=sources)
 
+    async def build_context_for_lesson_question(
+        self,
+        session: AsyncSession,
+        question: str,
+        user_id: int,
+        lesson_key: str | None = None,
+        lesson_date: Any | None = None,
+        document_ids: list[int] | None = None,
+    ) -> RAGAnswerContext:
+        question_embedding = await self.llm_client.create_embedding(question)
+        matches = await ChunkRepository.search_relevant_by_lesson(
+            session=session,
+            question_embedding=question_embedding,
+            user_id=user_id,
+            top_k=self.settings.max_context_chunks,
+            lesson_key=lesson_key,
+            lesson_date=lesson_date,
+            document_ids=document_ids,
+        )
+
+        selected_chunks: list[ChunkMatch] = []
+        total_chars = 0
+        for match in matches:
+            if total_chars + len(match.chunk_text) > self.settings.max_context_chars:
+                break
+            selected_chunks.append(match)
+            total_chars += len(match.chunk_text)
+
+        context_blocks: list[str] = []
+        sources: list[dict[str, Any]] = []
+        for index, match in enumerate(selected_chunks, start=1):
+            block = f"[Фрагмент {index} | lesson-scope | score={match.score:.3f}]\n{match.chunk_text}"
+            context_blocks.append(block)
+            sources.append(self._source_from_match(match))
+
+        return RAGAnswerContext(
+            chunks=selected_chunks,
+            context_text="\n\n".join(context_blocks),
+            sources=sources,
+        )
+
     async def build_context_for_document_question(
         self,
         session: AsyncSession,
