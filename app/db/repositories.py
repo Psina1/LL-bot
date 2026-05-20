@@ -19,6 +19,7 @@ from app.db.models import (
     Message,
     MessageFeedback,
     NotificationDelivery,
+    ProgramLesson,
     ProgramMedia,
     RoleEnum,
     User,
@@ -314,6 +315,73 @@ class ErrorRepository:
     async def latest(session: AsyncSession, limit: int = 5) -> list[ErrorLog]:
         result = await session.execute(select(ErrorLog).order_by(ErrorLog.created_at.desc()).limit(limit))
         return list(result.scalars().all())
+
+
+class ProgramLessonRepository:
+    @staticmethod
+    async def list_active(session: AsyncSession) -> list[ProgramLesson]:
+        result = await session.execute(
+            select(ProgramLesson)
+            .where(ProgramLesson.is_active.is_(True))
+            .order_by(ProgramLesson.sort_order.asc())
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def list_seasons(session: AsyncSession) -> list[tuple[str, str]]:
+        result = await session.execute(
+            select(ProgramLesson.season_key, ProgramLesson.season_title)
+            .where(ProgramLesson.is_active.is_(True))
+            .group_by(ProgramLesson.season_key, ProgramLesson.season_title)
+            .order_by(func.min(ProgramLesson.sort_order).asc())
+        )
+        return [(row[0], row[1]) for row in result.all()]
+
+    @staticmethod
+    async def list_blocks(session: AsyncSession, season_key: str) -> list[tuple[str, str, int]]:
+        result = await session.execute(
+            select(ProgramLesson.block_key, ProgramLesson.block_title, ProgramLesson.block_order)
+            .where(and_(ProgramLesson.is_active.is_(True), ProgramLesson.season_key == season_key))
+            .group_by(ProgramLesson.block_key, ProgramLesson.block_title, ProgramLesson.block_order)
+            .order_by(ProgramLesson.block_order.asc())
+        )
+        return [(row[0], row[1], row[2]) for row in result.all()]
+
+    @staticmethod
+    async def list_by_block(session: AsyncSession, block_key: str) -> list[ProgramLesson]:
+        result = await session.execute(
+            select(ProgramLesson)
+            .where(and_(ProgramLesson.is_active.is_(True), ProgramLesson.block_key == block_key))
+            .order_by(ProgramLesson.sort_order.asc())
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_by_key(session: AsyncSession, lesson_key: str) -> ProgramLesson | None:
+        result = await session.execute(select(ProgramLesson).where(ProgramLesson.lesson_key == lesson_key))
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_by_date(session: AsyncSession, lesson_date) -> ProgramLesson | None:
+        result = await session.execute(
+            select(ProgramLesson)
+            .where(
+                and_(
+                    ProgramLesson.is_active.is_(True),
+                    or_(
+                        ProgramLesson.date_start == lesson_date,
+                        and_(
+                            ProgramLesson.date_start <= lesson_date,
+                            ProgramLesson.date_end.is_not(None),
+                            ProgramLesson.date_end >= lesson_date,
+                        ),
+                    ),
+                )
+            )
+            .order_by(ProgramLesson.sort_order.asc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
 
 class DocumentRepository:
@@ -816,6 +884,16 @@ class ProgramMediaRepository:
         )
         result = await session.execute(stmt)
         return list(result.scalars().all())
+
+    @staticmethod
+    async def latest_by_type(session: AsyncSession, media_type: str) -> ProgramMedia | None:
+        result = await session.execute(
+            select(ProgramMedia)
+            .where(ProgramMedia.media_type == media_type)
+            .order_by(ProgramMedia.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     @staticmethod
     async def get_by_id(session: AsyncSession, media_id: int) -> ProgramMedia | None:

@@ -212,6 +212,39 @@ class BotText(Base):
     )
 
 
+class ProgramLesson(Base):
+    __tablename__ = "program_lessons"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season_key: Mapped[str] = mapped_column(String(100), index=True)
+    season_title: Mapped[str] = mapped_column(String(255))
+    block_key: Mapped[str] = mapped_column(String(100), index=True)
+    block_title: Mapped[str] = mapped_column(String(255))
+    block_order: Mapped[int] = mapped_column(Integer)
+    lesson_key: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    lesson_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    lesson_title: Mapped[str] = mapped_column(String(500))
+    date_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    date_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    date_text: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    speaker: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    content_status: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    material_format: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    hr_moderator_role: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_program_lessons_season_block", "season_key", "block_order"),
+        Index("ix_program_lessons_dates", "date_start", "date_end"),
+        Index("ix_program_lessons_active_sort", "is_active", "sort_order"),
+    )
+
+
 class Homework(Base):
     __tablename__ = "homeworks"
 

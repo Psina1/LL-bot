@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot
 from aiogram.enums import ParseMode
-from aiogram.types import FSInputFile
+from aiogram.types import FSInputFile, LinkPreviewOptions
 
 from app.bot.texts import BOT_TEXT_DEFAULTS
 from app.config import Settings
@@ -30,6 +30,7 @@ from app.notifications.constants import (
 )
 
 logger = logging.getLogger(__name__)
+NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
 class NotificationService:
@@ -91,7 +92,12 @@ class NotificationService:
                 continue
 
             try:
-                await bot.send_message(chat_id=recipient.telegram_id, text=text, parse_mode=ParseMode.HTML)
+                await bot.send_message(
+                    chat_id=recipient.telegram_id,
+                    text=text,
+                    parse_mode=ParseMode.HTML,
+                    link_preview_options=NO_LINK_PREVIEW,
+                )
                 if ics_path is not None:
                     await bot.send_document(
                         chat_id=recipient.telegram_id,

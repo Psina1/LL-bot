@@ -13,7 +13,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, KeyboardButton, LinkPreviewOptions, Message, ReplyKeyboardMarkup
 from sqlalchemy import text
 
 from app.bot.keyboards.reply import (
@@ -41,6 +41,10 @@ from app.bot.keyboards.reply import (
     project_context_keyboard,
     project_help_keyboard,
     question_section_keyboard,
+    schedule_blocks_keyboard,
+    schedule_lesson_keyboard,
+    schedule_lessons_keyboard,
+    schedule_seasons_keyboard,
     start_notification_time_keyboard,
     video_library_keyboard,
 )
@@ -69,6 +73,7 @@ from app.db.repositories import (
     MessageFeedbackRepository,
     MessageRepository,
     HomeworkRepository,
+    ProgramLessonRepository,
     ProgramMediaRepository,
     UserNotificationSettingRepository,
     StatsRepository,
@@ -104,6 +109,7 @@ FILE_PROCESSING_MESSAGES = [
 GROUP_CHAT_TYPES = {"group", "supergroup"}
 ANNOUNCEMENT_CHAT_ID_KEY = "announcement_chat_id"
 ANNOUNCEMENT_CHAT_TITLE_KEY = "announcement_chat_title"
+NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
 def _shorten_project_context(project_context: str, limit: int = 900) -> str:
@@ -178,6 +184,47 @@ def build_main_router(container: AppContainer) -> Router:
 
     def materials_menu_keyboard():
         return materials_type_keyboard(video_enabled=container.settings.video_library_enabled)
+
+    def reply_keyboard_from_labels(labels: list[str], row_size: int = 2, back_button: str = "Админ: меню") -> ReplyKeyboardMarkup:
+        rows: list[list[KeyboardButton]] = []
+        for index in range(0, len(labels), row_size):
+            rows.append([KeyboardButton(text=label) for label in labels[index : index + row_size]])
+        rows.append([KeyboardButton(text=back_button)])
+        return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+    def block_button_label(block: tuple[str, str, int]) -> str:
+        _, block_title, block_order = block
+        return f"Блок {block_order}. {block_title}"
+
+    def lesson_button_label(lesson) -> str:
+        return lesson.lesson_title if len(lesson.lesson_title) <= 62 else f"{lesson.lesson_title[:59]}..."
+
+    async def admin_blocks_keyboard(season_key: str) -> ReplyKeyboardMarkup:
+        async with SessionLocal() as session:
+            blocks = await ProgramLessonRepository.list_blocks(session, season_key)
+        return reply_keyboard_from_labels([block_button_label(block) for block in blocks])
+
+    async def admin_lessons_keyboard(block_key: str, whole_label: str = "Материал всего блока") -> ReplyKeyboardMarkup:
+        async with SessionLocal() as session:
+            lessons = await ProgramLessonRepository.list_by_block(session, block_key)
+        labels = [whole_label] + [lesson_button_label(lesson) for lesson in lessons]
+        return reply_keyboard_from_labels(labels, row_size=1)
+
+    def lesson_to_state_payload(prefix: str, lesson) -> dict[str, Any]:
+        return {
+            f"{prefix}_module_number": lesson.lesson_number,
+            f"{prefix}_module_title": f"{lesson.block_title}: {lesson.lesson_title}",
+            f"{prefix}_lesson_key": lesson.lesson_key,
+            f"{prefix}_lesson_date": lesson.date_start.isoformat() if lesson.date_start else None,
+        }
+
+    def block_to_state_payload(prefix: str, block_key: str, block_title: str) -> dict[str, Any]:
+        return {
+            f"{prefix}_module_number": None,
+            f"{prefix}_module_title": block_title,
+            f"{prefix}_lesson_key": block_key,
+            f"{prefix}_lesson_date": None,
+        }
 
     async def upsert_telegram_user(telegram_user):
         async with SessionLocal() as session:
@@ -269,6 +316,26 @@ def build_main_router(container: AppContainer) -> Router:
         homework_action = any(marker in text for marker in ["сдать", "отправить", "загрузить", "прикрепить", "приложить"])
         return homework_action and any(marker in text for marker in ["дз", "домаш", "задани"])
 
+    def looks_like_schedule_question(text_value: str | None) -> bool:
+        text = (text_value or "").lower()
+        return any(
+            marker in text
+            for marker in [
+                "распис",
+                "когда",
+                "какого числа",
+                "дата",
+                "занят",
+                "урок",
+                "блок",
+                "спикер",
+                "семенов",
+                "рахманов",
+                "макарова",
+                "сафронов",
+            ]
+        )
+
     def extract_media_payload(message: Message) -> dict[str, Any] | None:
         media = None
         telegram_kind = ""
@@ -325,7 +392,7 @@ def build_main_router(container: AppContainer) -> Router:
             return kind == "video" or mime_type.startswith("video/") or filename.endswith((".mp4", ".mov", ".m4v"))
         if media_type == "podcast":
             return kind in {"audio", "voice"} or mime_type.startswith("audio/") or filename.endswith((".mp3", ".m4a", ".wav", ".ogg"))
-        if media_type == "image":
+        if media_type in {"image", "schedule_image"}:
             return kind == "photo" or mime_type.startswith("image/") or filename.endswith((".jpg", ".jpeg", ".png", ".webp"))
         return False
 
@@ -464,12 +531,44 @@ def build_main_router(container: AppContainer) -> Router:
 
         lesson_key = None
         module_number = None
+        direct_lesson_markers = [
+            ("s1_b1_kickoff", ["кикоф", "kick-off", "kickoff"]),
+            ("s1_b2_l1", ["time to cash", "логика консалтингового бизнеса"]),
+            ("s1_b2_l2", ["организационные модели", "организационн"]),
+            ("s1_b2_l3", ["практикум"]),
+            ("s1_b2_l4", ["итоговая сборка блока"]),
+            ("s1_b3_l1", ["стратегия как инструмент"]),
+            ("s1_b3_l2", ["фокус", "стратегический выбор"]),
+            ("s1_b3_l3", ["ресурсы", "сценарное планирование"]),
+            ("s1_b3_l4", ["реализация стратегии", "сопротивляющейся системе"]),
+            ("s1_b4_l1", ["экономика проектов", "маржа"]),
+            ("s1_b4_l2", ["финансовая модель"]),
+            ("s1_b4_l3", ["финансовое мышление"]),
+            ("s1_b4_l4", ["интеграция и разбор"]),
+            ("s1_b5_final", ["очная сессия", "подведение итогов", "спб"]),
+        ]
+        for candidate_key, markers in direct_lesson_markers:
+            if any(marker in text for marker in markers):
+                lesson_key = candidate_key
+                break
+
+        block_key = None
+        if "бизнес" in text or "консалт" in text:
+            block_key = "s1_b2"
+        elif "стратег" in text:
+            block_key = "s1_b3"
+        elif "эконом" in text or "финанс" in text:
+            block_key = "s1_b4"
+
         module_match = re.search(r"(?:урок|модуль|занятие)\s*(?:№|номер)?\s*(\d+)", text, flags=re.IGNORECASE)
         if not module_match:
             module_match = re.search(r"\b(\d+)\s*(?:урок|модуль|занятие)\b", text, flags=re.IGNORECASE)
         if module_match:
             module_number = int(module_match.group(1))
-            lesson_key = f"lesson_{module_number}"
+            if block_key:
+                lesson_key = f"{block_key}_l{module_number}"
+            elif lesson_key is None:
+                lesson_key = f"lesson_{module_number}"
 
         if not lesson_key and lesson_date is None:
             return None
@@ -542,7 +641,12 @@ def build_main_router(container: AppContainer) -> Router:
             return
 
         try:
-            await message.bot.send_message(chat_id=chat_id, text=reminder_text, parse_mode=None)
+            await message.bot.send_message(
+                chat_id=chat_id,
+                text=reminder_text,
+                parse_mode=None,
+                link_preview_options=NO_LINK_PREVIEW,
+            )
         except Exception as exc:
             async with SessionLocal() as session:
                 await ErrorRepository.create(
@@ -709,6 +813,8 @@ def build_main_router(container: AppContainer) -> Router:
             await session.close()
 
         lookup_parts = []
+        if lookup.get("label"):
+            lookup_parts.append(str(lookup["label"]))
         if lookup.get("module_number"):
             lookup_parts.append(f"урок/модуль {lookup['module_number']}")
         if lookup.get("lesson_date"):
@@ -770,6 +876,8 @@ def build_main_router(container: AppContainer) -> Router:
         return True
 
     def media_caption(media) -> str:
+        if media.media_type == "schedule_image":
+            return media.title or "Расписание Лиги Лидеров"
         module_text = f"Модуль {media.module_number}" if media.module_number else "Без модуля"
         date_text = format_lesson_date(media.lesson_date)
         return f"{media.title}\n{module_text}\nДата: {date_text}"
@@ -821,6 +929,65 @@ def build_main_router(container: AppContainer) -> Router:
             ),
         )
         return True
+
+    def schedule_lesson_date_text(lesson) -> str:
+        if lesson.date_text:
+            return lesson.date_text
+        if lesson.date_start and lesson.date_end:
+            return f"{format_lesson_date(lesson.date_start)} - {format_lesson_date(lesson.date_end)}"
+        return format_lesson_date(lesson.date_start)
+
+    def format_schedule_overview(lessons) -> str:
+        if not lessons:
+            return "Расписание пока не заполнено."
+
+        lines = ["Расписание Лиги Лидеров"]
+        current_block_key = None
+        for lesson in lessons:
+            if lesson.block_key != current_block_key:
+                current_block_key = lesson.block_key
+                lines.extend(["", f"Блок {lesson.block_order}. {lesson.block_title}"])
+            lesson_line = f"- {schedule_lesson_date_text(lesson)}: {lesson.lesson_title}"
+            if lesson.speaker:
+                lesson_line += f" ({lesson.speaker})"
+            lines.append(lesson_line)
+        return "\n".join(lines)
+
+    def format_lesson_card(lesson) -> str:
+        lines = [
+            lesson.lesson_title,
+            "",
+            f"Сезон: {lesson.season_title}",
+            f"Блок: {lesson.block_title}",
+            f"Дата: {schedule_lesson_date_text(lesson)}",
+        ]
+        if lesson.speaker:
+            lines.append(f"Спикер: {lesson.speaker}")
+        if lesson.content_status:
+            lines.append(f"Готовность контента: {lesson.content_status}")
+        if lesson.material_format:
+            lines.append(f"Формат и материалы: {lesson.material_format}")
+        if lesson.hr_moderator_role:
+            lines.append(f"Роль HR-модераторов: {lesson.hr_moderator_role}")
+        return "\n".join(lines)
+
+    async def build_schedule_text_and_seasons() -> tuple[str, list[tuple[str, str]]]:
+        async with SessionLocal() as session:
+            lessons = await ProgramLessonRepository.list_active(session)
+            seasons = await ProgramLessonRepository.list_seasons(session)
+        return format_schedule_overview(lessons), seasons
+
+    async def build_schedule_context_for_llm() -> str:
+        schedule_text, _ = await build_schedule_text_and_seasons()
+        return f"Служебное расписание программы:\n{schedule_text}"
+
+    async def send_schedule_image(message: Message) -> None:
+        async with SessionLocal() as session:
+            media = await ProgramMediaRepository.latest_by_type(session, "schedule_image")
+            if media is None:
+                media = await ProgramMediaRepository.latest_by_type(session, "image")
+        if media is not None:
+            await send_media_asset(message, media)
 
     async def send_records_and_materials(message: Message, telegram_user=None) -> None:
         has_video = await show_media_picker(
@@ -1241,7 +1408,7 @@ def build_main_router(container: AppContainer) -> Router:
     async def start_handler(message: Message, state: FSMContext) -> None:
         await ensure_user(message)
         await state.clear()
-        await message.answer(await get_bot_text("welcome"), reply_markup=user_main_menu())
+        await message.answer(await get_bot_text("welcome"), reply_markup=user_main_menu(), link_preview_options=NO_LINK_PREVIEW)
         await message.answer(
             "Я буду напоминать тебе о занятиях и домашних заданиях. "
             "Выбери время, когда тебе будет удобно получать уведомления:",
@@ -1251,7 +1418,7 @@ def build_main_router(container: AppContainer) -> Router:
     @router.message(Command("help"))
     async def help_handler(message: Message) -> None:
         await ensure_user(message)
-        await message.answer(await get_bot_text("help"), reply_markup=user_main_menu())
+        await message.answer(await get_bot_text("help"), reply_markup=user_main_menu(), link_preview_options=NO_LINK_PREVIEW)
 
     @router.message(Command("cancel"))
     async def cancel_handler(message: Message, state: FSMContext) -> None:
@@ -1325,7 +1492,7 @@ def build_main_router(container: AppContainer) -> Router:
         await state.set_state(AdminFlow.waiting_for_material_season)
         await message.answer(
             "Запускаю мастер загрузки материала.\n\n"
-            "Шаг 1 из 5: выбери сезон материала.",
+            "Шаг 1: выбери сезон материала.",
             reply_markup=admin_material_season_keyboard(),
         )
 
@@ -1334,14 +1501,82 @@ def build_main_router(container: AppContainer) -> Router:
         if not await require_admin(message):
             await state.clear()
             return
-        season_title = "Сезон 1. Бизнес-консалтинг" if message.text == "Материал: Сезон 1. Бизнес-консалтинг" else None
-        await state.update_data(material_season_title=season_title)
-        await state.set_state(AdminFlow.waiting_for_material_module)
+        if message.text == "Материал: без сезона":
+            await state.update_data(material_season_key=None, material_season_title=None)
+            await state.set_state(AdminFlow.waiting_for_material_module)
+            await message.answer(
+                "Шаг 2: выбери привязку материала.\n\n"
+                "Это запасной путь для общих материалов без привязки к расписанию.",
+                reply_markup=admin_material_module_keyboard(),
+            )
+            return
+
+        await state.update_data(material_season_key="s1", material_season_title="Бизнес")
+        await state.set_state(AdminFlow.waiting_for_material_block)
         await message.answer(
-            "Шаг 2 из 5: выбери привязку материала.\n\n"
-            "Это нужно, чтобы бот понимал: файл общий или относится к конкретному уроку/модулю.",
-            reply_markup=admin_material_module_keyboard(),
+            "Шаг 2: выбери блок программы.",
+            reply_markup=await admin_blocks_keyboard("s1"),
         )
+
+    @router.message(AdminFlow.waiting_for_material_block, F.text)
+    async def admin_material_block_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        if message.text == "Админ: меню":
+            await state.clear()
+            await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
+            return
+        data = await state.get_data()
+        season_key = data.get("material_season_key") or "s1"
+        async with SessionLocal() as session:
+            blocks = await ProgramLessonRepository.list_blocks(session, season_key)
+        block_by_label = {block_button_label(block): block for block in blocks}
+        block = block_by_label.get(message.text)
+        if block is None:
+            await message.answer("Выбери блок кнопкой ниже или нажми «Админ: меню».", reply_markup=await admin_blocks_keyboard(season_key))
+            return
+        block_key, block_title, block_order = block
+        await state.update_data(material_block_key=block_key, material_block_title=block_title, material_block_order=block_order)
+        await state.set_state(AdminFlow.waiting_for_material_lesson)
+        await message.answer(
+            "Шаг 3: выбери занятие или весь блок.",
+            reply_markup=await admin_lessons_keyboard(block_key),
+        )
+
+    @router.message(AdminFlow.waiting_for_material_lesson, F.text)
+    async def admin_material_lesson_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        if message.text == "Админ: меню":
+            await state.clear()
+            await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
+            return
+        data = await state.get_data()
+        block_key = data.get("material_block_key")
+        block_title = data.get("material_block_title")
+        if not block_key or not block_title:
+            await state.clear()
+            await message.answer("Потерял выбранный блок. Начни загрузку заново.", reply_markup=admin_menu_keyboard())
+            return
+
+        if message.text == "Материал всего блока":
+            await state.update_data(**block_to_state_payload("material", block_key, block_title))
+            await state.set_state(AdminFlow.waiting_for_material_type)
+            await message.answer("Шаг 4: выбери тип материала.", reply_markup=admin_material_type_keyboard())
+            return
+
+        async with SessionLocal() as session:
+            lessons = await ProgramLessonRepository.list_by_block(session, block_key)
+        lesson_by_label = {lesson_button_label(lesson): lesson for lesson in lessons}
+        lesson = lesson_by_label.get(message.text)
+        if lesson is None:
+            await message.answer("Выбери занятие кнопкой ниже или нажми «Админ: меню».", reply_markup=await admin_lessons_keyboard(block_key))
+            return
+        await state.update_data(**lesson_to_state_payload("material", lesson))
+        await state.set_state(AdminFlow.waiting_for_material_type)
+        await message.answer("Шаг 4: выбери тип материала.", reply_markup=admin_material_type_keyboard())
 
     @router.message(AdminFlow.waiting_for_material_season)
     async def admin_material_season_invalid_handler(message: Message) -> None:
@@ -1409,9 +1644,10 @@ def build_main_router(container: AppContainer) -> Router:
         data = await state.get_data()
         season_title = data.get("material_season_title") or "без сезона"
         module_number = data.get("material_module_number")
+        module_title = data.get("material_module_title")
         lesson_date_raw = data.get("material_lesson_date")
         lesson_date = date.fromisoformat(lesson_date_raw) if lesson_date_raw else None
-        module_text = f"урок/модуль {module_number}" if module_number else "общий материал"
+        module_text = module_title or (f"урок/модуль {module_number}" if module_number else "общий материал")
         type_text = message.text.replace("Тип: ", "")
         if material_type == "homework":
             await state.set_state(AdminFlow.waiting_for_homework_link)
@@ -1462,9 +1698,10 @@ def build_main_router(container: AppContainer) -> Router:
         data = await state.get_data()
         season_title = data.get("material_season_title") or "без сезона"
         module_number = data.get("material_module_number")
+        module_title = data.get("material_module_title")
         lesson_date_raw = data.get("material_lesson_date")
         lesson_date = date.fromisoformat(lesson_date_raw) if lesson_date_raw else None
-        module_text = f"урок/модуль {module_number}" if module_number else "общий материал"
+        module_text = module_title or (f"урок/модуль {module_number}" if module_number else "общий материал")
         link_text = moodle_url or "без ссылки"
         await state.set_state(AdminFlow.waiting_for_global_file)
         await message.answer(
@@ -1498,20 +1735,106 @@ def build_main_router(container: AppContainer) -> Router:
         media_type_by_button = {
             "Медиа: видео": "video",
             "Медиа: подкаст": "podcast",
-            "Медиа: картинка": "image",
+            "Медиа: картинка": "schedule_image",
         }
         media_type = media_type_by_button[message.text]
         await state.update_data(media_type=media_type)
-        await state.set_state(AdminFlow.waiting_for_media_module)
+        if media_type == "schedule_image":
+            await state.update_data(
+                media_module_number=None,
+                media_module_title="Расписание Лиги Лидеров",
+                media_lesson_key="schedule",
+                media_lesson_date=None,
+            )
+            await state.set_state(AdminFlow.waiting_for_media_file)
+            await message.answer(
+                "Пришли картинку расписания.\n\n"
+                "Она будет показываться пользователю в разделе «Расписание Лиги Лидеров». "
+                "Название можно написать в подписи к картинке.",
+                reply_markup=admin_menu_keyboard(),
+            )
+            return
+        await state.set_state(AdminFlow.waiting_for_media_block)
         await message.answer(
-            "Шаг 2 из 4: выбери привязку медиа.\n\n"
-            "Это нужно, чтобы видео, подкаст или картинка относились к конкретному уроку/модулю либо были общими.",
-            reply_markup=admin_media_module_keyboard(),
+            "Шаг 2: выбери блок программы.",
+            reply_markup=await admin_blocks_keyboard("s1"),
         )
 
     @router.message(AdminFlow.waiting_for_media_type)
     async def admin_media_type_invalid_handler(message: Message) -> None:
         await message.answer("Выбери тип медиа кнопкой ниже или нажми «Админ: меню».", reply_markup=admin_media_type_keyboard())
+
+    @router.message(AdminFlow.waiting_for_media_block, F.text)
+    async def admin_media_block_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        if message.text == "Админ: меню":
+            await state.clear()
+            await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
+            return
+        async with SessionLocal() as session:
+            blocks = await ProgramLessonRepository.list_blocks(session, "s1")
+        block_by_label = {block_button_label(block): block for block in blocks}
+        block = block_by_label.get(message.text)
+        if block is None:
+            await message.answer("Выбери блок кнопкой ниже или нажми «Админ: меню».", reply_markup=await admin_blocks_keyboard("s1"))
+            return
+        block_key, block_title, block_order = block
+        await state.update_data(media_block_key=block_key, media_block_title=block_title, media_block_order=block_order)
+        await state.set_state(AdminFlow.waiting_for_media_lesson)
+        await message.answer(
+            "Шаг 3: выбери занятие или весь блок.",
+            reply_markup=await admin_lessons_keyboard(block_key, whole_label="Медиа всего блока"),
+        )
+
+    @router.message(AdminFlow.waiting_for_media_lesson, F.text)
+    async def admin_media_lesson_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        if message.text == "Админ: меню":
+            await state.clear()
+            await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
+            return
+        data = await state.get_data()
+        block_key = data.get("media_block_key")
+        block_title = data.get("media_block_title")
+        if not block_key or not block_title:
+            await state.clear()
+            await message.answer("Потерял выбранный блок. Начни загрузку заново.", reply_markup=admin_menu_keyboard())
+            return
+
+        if message.text == "Медиа всего блока":
+            await state.update_data(**block_to_state_payload("media", block_key, block_title))
+            await state.set_state(AdminFlow.waiting_for_media_file)
+            await message.answer(
+                "Шаг 4: пришли файл в Telegram.\n\n"
+                f"- привязка: {block_title}\n"
+                "Название можно написать в подписи к файлу. Если подписи нет, возьму имя файла.",
+                reply_markup=admin_menu_keyboard(),
+            )
+            return
+
+        async with SessionLocal() as session:
+            lessons = await ProgramLessonRepository.list_by_block(session, block_key)
+        lesson_by_label = {lesson_button_label(lesson): lesson for lesson in lessons}
+        lesson = lesson_by_label.get(message.text)
+        if lesson is None:
+            await message.answer(
+                "Выбери занятие кнопкой ниже или нажми «Админ: меню».",
+                reply_markup=await admin_lessons_keyboard(block_key, whole_label="Медиа всего блока"),
+            )
+            return
+        await state.update_data(**lesson_to_state_payload("media", lesson))
+        await state.set_state(AdminFlow.waiting_for_media_file)
+        await message.answer(
+            "Шаг 4: пришли файл в Telegram.\n\n"
+            f"- привязка: {lesson.block_title}: {lesson.lesson_title}\n"
+            f"- дата: {format_lesson_date(lesson.date_start)}\n\n"
+            "Название можно написать в подписи к файлу. Если подписи нет, возьму имя файла.",
+            reply_markup=admin_menu_keyboard(),
+        )
 
     @router.message(AdminFlow.waiting_for_media_module, F.text.startswith("Медиа: "))
     async def admin_media_module_handler(message: Message, state: FSMContext) -> None:
@@ -1559,6 +1882,7 @@ def build_main_router(container: AppContainer) -> Router:
             "video": "видео",
             "podcast": "аудиоподкаст",
             "image": "картинка",
+            "schedule_image": "картинка расписания",
         }
         type_text = type_text_by_media.get(media_type, "медиафайл")
         module_text = f"урок/модуль {module_number}" if module_number else "общий материал"
@@ -1604,7 +1928,7 @@ def build_main_router(container: AppContainer) -> Router:
         lesson_key = state_data.get("media_lesson_key")
         lesson_date_raw = state_data.get("media_lesson_date")
         lesson_date = date.fromisoformat(lesson_date_raw) if lesson_date_raw else None
-        if media_type not in {"video", "podcast", "image"}:
+        if media_type not in {"video", "podcast", "image", "schedule_image"}:
             await message.answer("Не понял тип медиа. Начни заново через «Админ: загрузить медиа».", reply_markup=admin_menu_keyboard())
             await state.clear()
             return
@@ -1614,6 +1938,7 @@ def build_main_router(container: AppContainer) -> Router:
                 "video": "видео",
                 "podcast": "аудиофайл",
                 "image": "картинку",
+                "schedule_image": "картинку расписания",
             }
             expected = expected_by_media.get(media_type, "медиафайл")
             await message.answer(f"Ожидал {expected}. Пришли правильный файл или начни заново.", reply_markup=admin_menu_keyboard())
@@ -1650,6 +1975,7 @@ def build_main_router(container: AppContainer) -> Router:
             "video": "видео",
             "podcast": "подкаст",
             "image": "картинка",
+            "schedule_image": "картинка расписания",
         }
         type_text = type_text_by_media.get(media_type, "медиа")
         module_text = f"урок/модуль {module_number}" if module_number else "общий материал"
@@ -1970,6 +2296,7 @@ def build_main_router(container: AppContainer) -> Router:
             f"Текущий текст:\n{current_value[:1800]}",
             reply_markup=admin_texts_keyboard(),
             parse_mode=None,
+            link_preview_options=NO_LINK_PREVIEW,
         )
 
     @router.message(AdminFlow.waiting_for_bot_text, F.text)
@@ -1998,6 +2325,7 @@ def build_main_router(container: AppContainer) -> Router:
         await message.answer(
             f"Предпросмотр текста «{BOT_TEXT_LABELS[key]}»:\n\n{pending_text}",
             reply_markup=admin_text_preview_keyboard(),
+            link_preview_options=NO_LINK_PREVIEW,
         )
 
     @router.callback_query(AdminFlow.waiting_for_bot_text_confirm, F.data.in_(["admin_text:save", "admin_text:cancel"]))
@@ -2058,12 +2386,85 @@ def build_main_router(container: AppContainer) -> Router:
     @router.message(F.text == "Помощь")
     async def help_button_handler(message: Message) -> None:
         await ensure_user(message)
-        await message.answer(await get_bot_text("help"), reply_markup=user_main_menu())
+        await message.answer(await get_bot_text("help"), reply_markup=user_main_menu(), link_preview_options=NO_LINK_PREVIEW)
 
     @router.message(F.text.in_(["Расписание Лиги Лидеров", "Расписание программы обучения"]))
     async def schedule_handler(message: Message) -> None:
         await ensure_user(message)
-        await message.answer(await get_bot_text("schedule"), reply_markup=user_main_menu())
+        custom_text = await get_bot_text("schedule")
+        if custom_text != BOT_TEXT_DEFAULTS["schedule"]:
+            await message.answer(custom_text, reply_markup=user_main_menu(), link_preview_options=NO_LINK_PREVIEW)
+        schedule_text, seasons = await build_schedule_text_and_seasons()
+        await message.answer(
+            schedule_text,
+            reply_markup=schedule_seasons_keyboard(seasons),
+            parse_mode=None,
+        )
+        await send_schedule_image(message)
+
+    @router.callback_query(F.data.startswith("schedule:season:"))
+    async def schedule_season_callback_handler(callback: CallbackQuery) -> None:
+        await upsert_telegram_user(callback.from_user)
+        await callback.answer()
+        season_key = (callback.data or "").split(":")[-1]
+        async with SessionLocal() as session:
+            blocks = await ProgramLessonRepository.list_blocks(session, season_key)
+        if callback.message:
+            await callback.message.answer("Выбери блок программы:", reply_markup=schedule_blocks_keyboard(blocks))
+
+    @router.callback_query(F.data.startswith("schedule:block:"))
+    async def schedule_block_callback_handler(callback: CallbackQuery) -> None:
+        await upsert_telegram_user(callback.from_user)
+        await callback.answer()
+        block_key = (callback.data or "").split(":")[-1]
+        async with SessionLocal() as session:
+            lessons = await ProgramLessonRepository.list_by_block(session, block_key)
+        if not callback.message:
+            return
+        if not lessons:
+            await callback.message.answer("Не нашёл занятия этого блока.", reply_markup=user_main_menu())
+            return
+        await callback.message.answer(
+            f"{lessons[0].block_title}. Выбери занятие:",
+            reply_markup=schedule_lessons_keyboard(lessons),
+        )
+
+    @router.callback_query(F.data.startswith("schedule:lesson:"))
+    async def schedule_lesson_callback_handler(callback: CallbackQuery) -> None:
+        await upsert_telegram_user(callback.from_user)
+        await callback.answer()
+        lesson_key = (callback.data or "").split(":")[-1]
+        async with SessionLocal() as session:
+            lesson = await ProgramLessonRepository.get_by_key(session, lesson_key)
+        if not callback.message:
+            return
+        if lesson is None:
+            await callback.message.answer("Не нашёл это занятие в расписании.", reply_markup=user_main_menu())
+            return
+        await callback.message.answer(format_lesson_card(lesson), reply_markup=schedule_lesson_keyboard(lesson), parse_mode=None)
+
+    @router.callback_query(F.data.startswith("schedule:materials:"))
+    async def schedule_materials_callback_handler(callback: CallbackQuery) -> None:
+        await upsert_telegram_user(callback.from_user)
+        await callback.answer()
+        lesson_key = (callback.data or "").split(":")[-1]
+        async with SessionLocal() as session:
+            lesson = await ProgramLessonRepository.get_by_key(session, lesson_key)
+        if callback.message is None:
+            return
+        if lesson is None:
+            await callback.message.answer("Не нашёл это занятие в расписании.", reply_markup=user_main_menu())
+            return
+        await send_materials_by_lookup(
+            callback.message,
+            {
+                "lesson_key": lesson.lesson_key,
+                "lesson_date": lesson.date_start,
+                "module_number": lesson.lesson_number,
+                "label": lesson.lesson_title,
+            },
+            telegram_user=callback.from_user,
+        )
 
     @router.message(F.text.in_(["Настройки уведомлений", "Настройка уведомлений"]))
     async def notification_settings_handler(message: Message) -> None:
@@ -2153,19 +2554,6 @@ def build_main_router(container: AppContainer) -> Router:
         if callback.message:
             await send_podcast_text_summary(callback.message, state, telegram_user=callback.from_user)
 
-    @router.callback_query(F.data == "materials:images")
-    async def materials_images_callback_handler(callback: CallbackQuery) -> None:
-        await upsert_telegram_user(callback.from_user)
-        await callback.answer()
-        if not callback.message:
-            return
-        await show_media_picker(
-            callback.message,
-            media_type="image",
-            title="Выбери картинку или схему:",
-            empty_text="Картинки и схемы пока не загружены.",
-        )
-
     @router.callback_query(F.data == "materials:summary")
     async def materials_summary_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
         await upsert_telegram_user(callback.from_user)
@@ -2251,16 +2639,6 @@ def build_main_router(container: AppContainer) -> Router:
             title="Выбери подкаст:",
             empty_text=PODCASTS_PROMPT,
             empty_reply_markup=podcast_empty_keyboard(),
-        )
-
-    @router.message(F.text == "Картинки и схемы")
-    async def materials_images_handler(message: Message) -> None:
-        await ensure_user(message)
-        await show_media_picker(
-            message,
-            media_type="image",
-            title="Выбери картинку или схему:",
-            empty_text="Картинки и схемы пока не загружены.",
         )
 
     @router.message(F.text == "Саммари занятий")
@@ -2367,7 +2745,8 @@ def build_main_router(container: AppContainer) -> Router:
             await send_materials_by_lookup(message, material_lookup)
             await state.clear()
             return
-        await answer_question(message, message.text, state, mode="training_qa")
+        extra_context = await build_schedule_context_for_llm() if looks_like_schedule_question(message.text) else None
+        await answer_question(message, message.text, state, mode="training_qa", extra_context=extra_context)
         await state.clear()
 
     @router.message(UserFlow.waiting_for_categorized_question, F.text)
@@ -2390,6 +2769,9 @@ def build_main_router(container: AppContainer) -> Router:
             section = "technical"
 
         mode, extra_context, force_rag = question_section_context(section)
+        if section != "technical" and looks_like_schedule_question(message.text):
+            schedule_context = await build_schedule_context_for_llm()
+            extra_context = f"{extra_context or ''}\n\n{schedule_context}".strip()
         await answer_question(
             message,
             message.text,

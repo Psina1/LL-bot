@@ -26,7 +26,7 @@ MATERIALS_SEASON_BUTTONS = [
 
 MATERIALS_TYPE_BUTTONS = [
     [KeyboardButton(text="Записи и материалы занятий"), KeyboardButton(text="Подкасты на основе занятий")],
-    [KeyboardButton(text="Саммари занятий"), KeyboardButton(text="Картинки и схемы")],
+    [KeyboardButton(text="Саммари занятий")],
     [KeyboardButton(text="Главное меню")],
 ]
 
@@ -140,7 +140,6 @@ def materials_type_keyboard(video_enabled: bool = False) -> ReplyKeyboardMarkup:
         keyboard = [
             [KeyboardButton(text="Записи и материалы занятий"), VIDEO_LIBRARY_BUTTON[0]],
             [KeyboardButton(text="Подкасты на основе занятий"), KeyboardButton(text="Саммари занятий")],
-            [KeyboardButton(text="Картинки и схемы")],
             [KeyboardButton(text="Главное меню")],
         ]
     else:
@@ -210,10 +209,8 @@ def feedback_keyboard(message_id: int) -> InlineKeyboardMarkup:
 def question_section_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Вопрос по программе", callback_data="question_section:program"),
-                InlineKeyboardButton(text="Технический вопрос", callback_data="question_section:technical"),
-            ],
+            [InlineKeyboardButton(text="Вопрос по программе", callback_data="question_section:program")],
+            [InlineKeyboardButton(text="Технический вопрос", callback_data="question_section:technical")],
             [InlineKeyboardButton(text="Другое", callback_data="question_section:other")],
             [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
         ]
@@ -223,14 +220,9 @@ def question_section_keyboard() -> InlineKeyboardMarkup:
 def materials_program_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Записи и материалы занятий", callback_data="materials:records"),
-                InlineKeyboardButton(text="Подкасты на основе занятий", callback_data="materials:podcasts"),
-            ],
-            [
-                InlineKeyboardButton(text="Саммари занятий", callback_data="materials:summary"),
-                InlineKeyboardButton(text="Картинки и схемы", callback_data="materials:images"),
-            ],
+            [InlineKeyboardButton(text="Записи и материалы занятий", callback_data="materials:records")],
+            [InlineKeyboardButton(text="Подкасты на основе занятий", callback_data="materials:podcasts")],
+            [InlineKeyboardButton(text="Саммари занятий", callback_data="materials:summary")],
             [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
         ]
     )
@@ -239,10 +231,8 @@ def materials_program_keyboard() -> InlineKeyboardMarkup:
 def homework_program_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Список заданий", callback_data="homework:list"),
-                InlineKeyboardButton(text="Помощь с домашкой", callback_data="homework:help"),
-            ],
+            [InlineKeyboardButton(text="Список заданий", callback_data="homework:list")],
+            [InlineKeyboardButton(text="Помощь с домашкой", callback_data="homework:help")],
             [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
         ]
     )
@@ -300,9 +290,46 @@ def start_notification_time_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(text=time_value, callback_data=f"start_notification_time:{time_value}")
-                for time_value in NOTIFICATION_TIME_OPTIONS[:2]
-            ],
-            [InlineKeyboardButton(text=NOTIFICATION_TIME_OPTIONS[2], callback_data=f"start_notification_time:{NOTIFICATION_TIME_OPTIONS[2]}")],
+                for time_value in NOTIFICATION_TIME_OPTIONS
+            ]
+        ]
+    )
+
+
+def schedule_seasons_keyboard(seasons) -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton(text=season_title, callback_data=f"schedule:season:{season_key}")]
+        for season_key, season_title in seasons
+    ]
+    keyboard.append([InlineKeyboardButton(text="Главное меню", callback_data="menu:main")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def schedule_blocks_keyboard(blocks) -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton(text=f"Блок {block_order}. {block_title}", callback_data=f"schedule:block:{block_key}")]
+        for block_key, block_title, block_order in blocks
+    ]
+    keyboard.append([InlineKeyboardButton(text="Главное меню", callback_data="menu:main")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def schedule_lessons_keyboard(lessons) -> InlineKeyboardMarkup:
+    keyboard = []
+    for lesson in lessons:
+        title = lesson.lesson_title if len(lesson.lesson_title) <= 56 else f"{lesson.lesson_title[:53]}..."
+        keyboard.append([InlineKeyboardButton(text=title, callback_data=f"schedule:lesson:{lesson.lesson_key}")])
+    keyboard.append([InlineKeyboardButton(text="К блокам сезона", callback_data=f"schedule:season:{lessons[0].season_key}" if lessons else "schedule:season:s1")])
+    keyboard.append([InlineKeyboardButton(text="Главное меню", callback_data="menu:main")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def schedule_lesson_keyboard(lesson) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Материалы занятия", callback_data=f"schedule:materials:{lesson.lesson_key}")],
+            [InlineKeyboardButton(text="К занятиям блока", callback_data=f"schedule:block:{lesson.block_key}")],
+            [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
         ]
     )
 
