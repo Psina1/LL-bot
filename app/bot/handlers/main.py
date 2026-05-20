@@ -875,9 +875,9 @@ def build_main_router(container: AppContainer) -> Router:
             await message.answer("После просмотра можно вернуться в главное меню.", reply_markup=user_main_menu())
         return True
 
-    def media_caption(media) -> str:
+    def media_caption(media) -> str | None:
         if media.media_type == "schedule_image":
-            return media.title or "Расписание Лиги Лидеров"
+            return None
         module_text = f"Модуль {media.module_number}" if media.module_number else "Без модуля"
         date_text = format_lesson_date(media.lesson_date)
         return f"{media.title}\n{module_text}\nДата: {date_text}"
@@ -984,8 +984,6 @@ def build_main_router(container: AppContainer) -> Router:
     async def send_schedule_image(message: Message) -> None:
         async with SessionLocal() as session:
             media = await ProgramMediaRepository.latest_by_type(session, "schedule_image")
-            if media is None:
-                media = await ProgramMediaRepository.latest_by_type(session, "image")
         if media is not None:
             await send_media_asset(message, media)
 
@@ -2392,13 +2390,11 @@ def build_main_router(container: AppContainer) -> Router:
     async def schedule_handler(message: Message) -> None:
         await ensure_user(message)
         custom_text = await get_bot_text("schedule")
-        if custom_text != BOT_TEXT_DEFAULTS["schedule"]:
-            await message.answer(custom_text, reply_markup=user_main_menu(), link_preview_options=NO_LINK_PREVIEW)
-        schedule_text, seasons = await build_schedule_text_and_seasons()
         await message.answer(
-            schedule_text,
-            reply_markup=schedule_seasons_keyboard(seasons),
+            custom_text,
+            reply_markup=user_main_menu(),
             parse_mode=None,
+            link_preview_options=NO_LINK_PREVIEW,
         )
         await send_schedule_image(message)
 
