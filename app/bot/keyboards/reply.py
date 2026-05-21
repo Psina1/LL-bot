@@ -54,14 +54,19 @@ NOTIFICATION_SETTINGS_BUTTONS = [
 
 
 ADMIN_MENU_BUTTONS = [
-    [KeyboardButton(text="Админ: статус")],
-    [KeyboardButton(text="Админ: загрузить материал"), KeyboardButton(text="Админ: материалы")],
-    [KeyboardButton(text="Админ: тексты"), KeyboardButton(text="Админ: статистика")],
-    [KeyboardButton(text="Админ: аналитика"), KeyboardButton(text="Админ: выгрузка CSV")],
-    [KeyboardButton(text="Админ: уведомления"), KeyboardButton(text="Админ: стоп уведомления")],
-    [KeyboardButton(text="Админ: напоминание"), KeyboardButton(text="Админ: загрузить ICS")],
-    [KeyboardButton(text="Админ: загрузить медиа"), KeyboardButton(text="Админ: расходы")],
+    [KeyboardButton(text="Админ: обзор")],
+    [KeyboardButton(text="Админ: загрузить материал для ИИ"), KeyboardButton(text="Админ: материалы")],
+    [KeyboardButton(text="Админ: техфайлы"), KeyboardButton(text="Админ: тексты")],
+    [KeyboardButton(text="Админ: автоуведомления"), KeyboardButton(text="Админ: ручное сообщение")],
     [KeyboardButton(text="Главное меню")],
+]
+
+
+ADMIN_TECH_FILES_BUTTONS = [
+    [KeyboardButton(text="Техфайл: ICS календаря")],
+    [KeyboardButton(text="Техфайл: картинка расписания")],
+    [KeyboardButton(text="Техфайл: видео/подкаст")],
+    [KeyboardButton(text="Админ: меню")],
 ]
 
 
@@ -69,7 +74,6 @@ ADMIN_TEXTS_BUTTONS = [
     [KeyboardButton(text="Изменить приветствие")],
     [KeyboardButton(text="Изменить помощь")],
     [KeyboardButton(text="Изменить расписание")],
-    [KeyboardButton(text="Изменить текст уведомления")],
     [KeyboardButton(text="Админ: меню")],
 ]
 
@@ -116,7 +120,6 @@ ADMIN_HOMEWORK_DEADLINE_BUTTONS = [
 
 ADMIN_MEDIA_TYPE_BUTTONS = [
     [KeyboardButton(text="Медиа: видео"), KeyboardButton(text="Медиа: подкаст")],
-    [KeyboardButton(text="Медиа: картинка")],
     [KeyboardButton(text="Админ: меню")],
 ]
 
@@ -171,6 +174,10 @@ def admin_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=ADMIN_MENU_BUTTONS, resize_keyboard=True)
 
 
+def admin_tech_files_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=ADMIN_TECH_FILES_BUTTONS, resize_keyboard=True)
+
+
 def all_reply_button_labels() -> set[str]:
     keyboard_groups = [
         MAIN_MENU_BUTTONS,
@@ -183,6 +190,7 @@ def all_reply_button_labels() -> set[str]:
         PROJECT_HELP_BUTTONS,
         NOTIFICATION_SETTINGS_BUTTONS,
         ADMIN_MENU_BUTTONS,
+        ADMIN_TECH_FILES_BUTTONS,
         ADMIN_TEXTS_BUTTONS,
         ADMIN_MATERIAL_SEASON_BUTTONS,
         ADMIN_MATERIAL_MODULE_BUTTONS,
@@ -407,5 +415,26 @@ def admin_text_preview_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Сохранить текст", callback_data="admin_text:save"),
                 InlineKeyboardButton(text="Отменить", callback_data="admin_text:cancel"),
             ]
+        ]
+    )
+
+
+def admin_overview_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Выгрузить CSV", callback_data="admin:export_csv")],
+            [InlineKeyboardButton(text="Автоуведомления", callback_data="admin_notifications:refresh")],
+        ]
+    )
+
+
+def admin_notification_control_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Включить автоуведомления", callback_data="admin_notifications:start"),
+                InlineKeyboardButton(text="Остановить", callback_data="admin_notifications:stop"),
+            ],
+            [InlineKeyboardButton(text="Обновить статус", callback_data="admin_notifications:refresh")],
         ]
     )

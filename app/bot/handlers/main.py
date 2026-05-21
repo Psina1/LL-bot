@@ -28,6 +28,9 @@ from app.bot.keyboards.reply import (
     admin_media_module_keyboard,
     admin_media_type_keyboard,
     admin_menu_keyboard,
+    admin_notification_control_keyboard,
+    admin_overview_keyboard,
+    admin_tech_files_keyboard,
     admin_text_preview_keyboard,
     admin_texts_keyboard,
     feedback_reason_keyboard,
@@ -1512,7 +1515,7 @@ def build_main_router(container: AppContainer) -> Router:
         await state.clear()
         await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
 
-    @router.message(F.text == "Админ: напоминание")
+    @router.message(F.text.in_(["Админ: ручное сообщение", "Админ: напоминание"]))
     async def admin_reminder_prompt_handler(message: Message, state: FSMContext) -> None:
         if not await require_admin(message):
             return
@@ -1527,7 +1530,8 @@ def build_main_router(container: AppContainer) -> Router:
         await message.answer(
             "Пришли текст напоминания одним сообщением.\n\n"
             f"Текущий статус: {chat_line}.\n\n"
-            "Если удобнее командой: /send_reminder текст напоминания",
+            "Это ручная разовая отправка в общий чат. Она не связана с автоуведомлениями по событиям и домашкам.\n\n"
+            "Если удобнее командой: /send_reminder текст сообщения",
             reply_markup=admin_menu_keyboard(),
             parse_mode=None,
         )
@@ -1539,26 +1543,34 @@ def build_main_router(container: AppContainer) -> Router:
             return
         admin_navigation_texts = {
             "Админ: меню",
+            "Админ: обзор",
+            "Админ: загрузить материал для ИИ",
             "Админ: статус",
             "Админ: загрузить материал",
             "Админ: материалы",
+            "Админ: техфайлы",
             "Админ: тексты",
             "Админ: статистика",
             "Админ: аналитика",
             "Админ: выгрузка CSV",
+            "Админ: автоуведомления",
             "Админ: уведомления",
             "Админ: стоп уведомления",
+            "Админ: ручное сообщение",
             "Админ: напоминание",
             "Админ: загрузить ICS",
             "Админ: загрузить медиа",
             "Админ: расходы",
+            "Техфайл: ICS календаря",
+            "Техфайл: картинка расписания",
+            "Техфайл: видео/подкаст",
             "Главное меню",
         }
         if message.text in admin_navigation_texts:
             await state.clear()
             reply_markup = admin_menu_keyboard() if message.text.startswith("Админ:") else user_main_menu()
             await message.answer(
-                "Напоминание не отправил. Если нужно отправить текст в чат, нажми «Админ: напоминание» ещё раз.",
+                "Ручное сообщение не отправил. Если нужно отправить текст в чат, нажми «Админ: ручное сообщение» ещё раз.",
                 reply_markup=reply_markup,
             )
             return
@@ -1566,16 +1578,140 @@ def build_main_router(container: AppContainer) -> Router:
         await send_reminder_to_group(message, message.text, user.id)
         await state.clear()
 
+    async def build_admin_overview_report() -> str:
+        now = datetime.now(timezone.utc)
+        since_24h = now - timedelta(days=1)
+        since_7d = now - timedelta(days=7)
+        exclude_admin_ids = container.settings.admin_ids
+
+        db_started = time.monotonic()
+        latest_errors = []
+        try:
+            async with SessionLocal() as session:
+                await session.execute(text("SELECT 1"))
+                totals = await StatsRepository.dashboard(session)
+                latest_errors = await ErrorRepository.latest(session, limit=3)
+                allowed_count = await AllowedUserRepository.count_active(session)
+                recent_users = await UserRepository.list_recent(session, limit=5)
+                active_24h = await UserEventRepository.active_users_since(
+                    session,
+                    since_24h,
+                    exclude_telegram_ids=exclude_admin_ids,
+                )
+                active_7d = await UserEventRepository.active_users_since(
+                    session,
+                    since_7d,
+                    exclude_telegram_ids=exclude_admin_ids,
+                )
+                button_events_24h = await UserEventRepository.count_events_since(
+                    session,
+                    since_24h,
+                    event_types=["reply_button", "inline_button"],
+                    exclude_telegram_ids=exclude_admin_ids,
+                )
+                top_7d = await UserEventRepository.top_events(
+                    session,
+                    ["reply_button", "inline_button"],
+                    since=since_7d,
+                    limit=5,
+                    exclude_telegram_ids=exclude_admin_ids,
+                )
+                usage_today = await StatsRepository.token_usage_since(session, since_24h)
+                usage_week = await StatsRepository.token_usage_since(session, since_7d)
+                active_value = await AppSettingRepository.get_value(session, NOTIFICATION_ACTIVE_KEY)
+                tomorrow = datetime.now().date() + timedelta(days=1)
+                due_lessons = await ProgramLessonRepository.list_by_start_date(session, tomorrow)
+                due_homeworks = await HomeworkRepository.list_by_deadline(session, tomorrow)
+            db_ms = int((time.monotonic() - db_started) * 1000)
+            db_status = f"OK ({db_ms} мс)"
+        except Exception as exc:
+            totals = {}
+            allowed_count = active_24h = active_7d = button_events_24h = 0
+            top_7d = []
+            recent_users = []
+            usage_today = {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            usage_week = usage_today
+            active_value = "false"
+            due_lessons = []
+            due_homeworks = []
+            db_status = f"ошибка ({str(exc)[:120]})"
+
+        llm_status = "не проверял"
+        try:
+            chat_started = time.monotonic()
+            await container.llm_client.chat_completion(
+                system_prompt="Ты healthcheck. Ответь только OK.",
+                user_prompt="Ответь только OK.",
+                temperature=0,
+            )
+            llm_status = f"OK ({int((time.monotonic() - chat_started) * 1000)} мс)"
+        except Exception as exc:
+            llm_status = f"ошибка ({str(exc)[:120]})"
+
+        settings = container.settings
+
+        def openai_chat_cost(usage: dict[str, int]) -> float:
+            input_cost_usd = usage["prompt_tokens"] / 1_000_000 * settings.openai_chat_input_usd_per_1m
+            output_cost_usd = usage["completion_tokens"] / 1_000_000 * settings.openai_chat_output_usd_per_1m
+            return (input_cost_usd + output_cost_usd) * settings.usd_rub_rate
+
+        data_size_mb = _dir_size_mb(container.settings.data_dir)
+        lines = [
+            "Админ-обзор:",
+            "",
+            "Состояние:",
+            f"- база данных: {db_status}",
+            f"- LLM: {llm_status}",
+            f"- автоуведомления: {'включены' if _setting_enabled(active_value) else 'остановлены'}",
+            f"- завтра к отправке: событий={len(due_lessons)}, домашек={len(due_homeworks)}",
+            "",
+            "Контент и RAG:",
+            f"- документов: {totals.get('documents', 0)}",
+            f"- чанков: {totals.get('chunks', 0)}",
+            f"- ДЗ: {totals.get('active_homeworks', 0)}",
+            f"- личных файлов: {totals.get('user_documents', 0)}",
+            f"- размер data: {data_size_mb:.1f} МБ",
+            "",
+            "Пользователи и активность:",
+            f"- в списке доступа: {allowed_count}",
+            f"- пользователей в БД: {totals.get('users', 0)}",
+            f"- активных за 24ч/7д: {active_24h}/{active_7d}",
+            f"- вопросов за 24ч/7д/30д: {totals.get('messages_today', 0)}/{totals.get('messages_week', 0)}/{totals.get('messages_month', 0)}",
+            f"- кликов по кнопкам за 24ч: {button_events_24h}",
+            "",
+            "Расходы OpenAI, примерно:",
+            f"- 24ч: {_format_rub(openai_chat_cost(usage_today))}",
+            f"- 7д: {_format_rub(openai_chat_cost(usage_week))}",
+            "",
+            "Топ кнопок за 7д:",
+        ]
+        if top_7d:
+            for stat in top_7d:
+                lines.append(f"- {stat.event_name}: {stat.count}")
+        else:
+            lines.append("- пока нет данных")
+
+        lines.extend(["", "Последние пользователи:"])
+        if recent_users:
+            for user in recent_users:
+                name = user.full_name or user.username or str(user.telegram_id)
+                username = f"@{user.username}" if user.username else "без username"
+                lines.append(f"- {name} ({username}), id={user.telegram_id}")
+        else:
+            lines.append("- пока нет данных")
+
+        lines.extend(["", "Последние ошибки:"])
+        if latest_errors:
+            for error in latest_errors:
+                lines.append(f"- {error.context}: {error.error_text[:120]}")
+        else:
+            lines.append("- ошибок нет")
+
+        return "\n".join(lines)
+
     async def build_notification_admin_report() -> str:
         async with SessionLocal() as session:
             active_value = await AppSettingRepository.get_value(session, NOTIFICATION_ACTIVE_KEY)
-            expires_at = await AppSettingRepository.get_value(session, NOTIFICATION_EXPIRES_AT_KEY)
-            ics_filename = await AppSettingRepository.get_value(session, NOTIFICATION_ICS_FILENAME_KEY)
-            notification_text = await BotTextRepository.get_value(
-                session,
-                NOTIFICATION_TEXT_KEY,
-                BOT_TEXT_DEFAULTS[NOTIFICATION_TEXT_KEY],
-            )
             recipients_by_time = {
                 time_value: len(await UserNotificationSettingRepository.list_due_recipients(session, time_value))
                 for time_value in NOTIFICATION_TIME_OPTIONS
@@ -1585,17 +1721,11 @@ def build_main_router(container: AppContainer) -> Router:
             due_homeworks = await HomeworkRepository.list_by_deadline(session, tomorrow)
 
         active = _setting_enabled(active_value)
-        preview = notification_text.strip()
-        if len(preview) > 700:
-            preview = f"{preview[:700].rstrip()}..."
-
         lines = [
-            "Уведомления:",
-            f"- статус рассылки: {'активна' if active else 'остановлена'}",
-            f"- срок годности: {expires_at or 'не задан'}",
-            f"- ICS-файл: {ics_filename or 'не загружен'}",
+            "Автоуведомления:",
+            f"- статус: {'включены' if active else 'остановлены'}",
             "",
-            "Автоматические уведомления теперь одноразовые:",
+            "Есть только две автоматические логики:",
             "- события: за 1 день до даты занятия",
             "- домашки: за 1 день до дедлайна сдачи",
             "- время: то, которое выбрал пользователь",
@@ -1608,25 +1738,81 @@ def build_main_router(container: AppContainer) -> Router:
         lines.extend(
             [
                 "",
-                "Текущий текст:",
-                preview or "текст не задан",
-                "",
-                "Команды:",
-                "- /stop_notifications - остановить текущую рассылку",
-                "- /start_notifications 2026-05-22 12:00 - включить рассылку до указанного времени",
-                "- /start_notifications - включить без срока годности",
-                "",
-                "Старый текст уведомления не отправляется ежедневно. Он оставлен только как черновик для ручных/тестовых рассылок.",
+                "Ручные сообщения в общий чат - отдельная админская функция. Они не относятся к автоуведомлениям.",
             ]
         )
         return "\n".join(lines)
 
+    @router.message(Command("admin_overview"))
+    @router.message(F.text.in_(["Админ: обзор", "Админ: статус", "Админ: статистика", "Админ: аналитика", "Админ: расходы"]))
+    async def admin_overview_handler(message: Message) -> None:
+        if not await require_admin(message):
+            return
+        await message.answer("Собираю статус, статистику и аналитику...")
+        await message.answer(
+            await build_admin_overview_report(),
+            reply_markup=admin_overview_keyboard(),
+            parse_mode=None,
+        )
+
     @router.message(Command("notification_status"))
-    @router.message(F.text == "Админ: уведомления")
+    @router.message(F.text.in_(["Админ: автоуведомления", "Админ: уведомления"]))
     async def admin_notification_status_handler(message: Message) -> None:
         if not await require_admin(message):
             return
-        await message.answer(await build_notification_admin_report(), reply_markup=admin_menu_keyboard(), parse_mode=None)
+        await message.answer(
+            await build_notification_admin_report(),
+            reply_markup=admin_notification_control_keyboard(),
+            parse_mode=None,
+        )
+
+    @router.callback_query(F.data.in_(["admin_notifications:start", "admin_notifications:stop", "admin_notifications:refresh"]))
+    async def admin_notification_control_callback(callback: CallbackQuery) -> None:
+        if not is_admin_user_id(callback.from_user.id):
+            await callback.answer("Эта кнопка доступна только администратору.", show_alert=True)
+            return
+        user = await upsert_telegram_user(callback.from_user)
+        if callback.data == "admin_notifications:start":
+            async with SessionLocal() as session:
+                await AppSettingRepository.upsert(
+                    session,
+                    key=NOTIFICATION_ACTIVE_KEY,
+                    value="true",
+                    updated_by_user_id=user.id,
+                )
+                await AppSettingRepository.upsert(
+                    session,
+                    key=NOTIFICATION_EXPIRES_AT_KEY,
+                    value="",
+                    updated_by_user_id=user.id,
+                )
+            await callback.answer("Автоуведомления включены.")
+        elif callback.data == "admin_notifications:stop":
+            async with SessionLocal() as session:
+                await AppSettingRepository.upsert(
+                    session,
+                    key=NOTIFICATION_ACTIVE_KEY,
+                    value="false",
+                    updated_by_user_id=user.id,
+                )
+            await callback.answer("Автоуведомления остановлены.")
+        else:
+            await callback.answer("Обновляю статус.")
+
+        if callback.message:
+            report = await build_notification_admin_report()
+            try:
+                await callback.message.edit_text(
+                    report,
+                    reply_markup=admin_notification_control_keyboard(),
+                    parse_mode=None,
+                )
+            except TelegramBadRequest:
+                await callback.message.answer(
+                    report,
+                    reply_markup=admin_notification_control_keyboard(),
+                    parse_mode=None,
+                )
 
     @router.message(Command("stop_notifications"))
     @router.message(F.text == "Админ: стоп уведомления")
@@ -1642,9 +1828,8 @@ def build_main_router(container: AppContainer) -> Router:
                 updated_by_user_id=user.id,
             )
         await message.answer(
-            "Рассылка пользовательских уведомлений остановлена.\n\n"
-            "Текст и ICS-файл не удалял: их можно использовать позже. "
-            "Чтобы снова включить, отправь /start_notifications 2026-05-22 12:00.",
+            "Автоуведомления остановлены.\n\n"
+            "Бот не будет отправлять уведомления по событиям и домашкам, пока админ не включит их обратно.",
             reply_markup=admin_menu_keyboard(),
             parse_mode=None,
         )
@@ -1681,17 +1866,17 @@ def build_main_router(container: AppContainer) -> Router:
             )
 
         if expires_at is None:
-            tail = "Срок годности не задан, поэтому не забудь потом нажать «Админ: стоп уведомления»."
+            tail = "Бот будет отправлять только одноразовые уведомления по событиям и домашкам."
         else:
-            tail = f"Бот сам перестанет отправлять это уведомление после {expires_at.strftime('%d.%m.%Y %H:%M')}."
+            tail = f"Бот перестанет отправлять автоуведомления после {expires_at.strftime('%d.%m.%Y %H:%M')}."
         await message.answer(
-            f"Рассылка пользовательских уведомлений включена.\n\n{tail}",
+            f"Автоуведомления включены.\n\n{tail}",
             reply_markup=admin_menu_keyboard(),
             parse_mode=None,
         )
 
     @router.message(Command("upload_global_material"))
-    @router.message(F.text == "Админ: загрузить материал")
+    @router.message(F.text.in_(["Админ: загрузить материал для ИИ", "Админ: загрузить материал"]))
     async def admin_upload_command(message: Message, state: FSMContext) -> None:
         if not await require_admin(message):
             return
@@ -1995,15 +2180,53 @@ def build_main_router(container: AppContainer) -> Router:
             parse_mode=None,
         )
 
+    @router.message(F.text == "Админ: техфайлы")
+    async def admin_tech_files_handler(message: Message) -> None:
+        if not await require_admin(message):
+            return
+        await message.answer(
+            "Техфайлы и медиа - это файлы, которые бот хранит и отдаёт пользователям, но не отправляет в RAG/ИИ.\n\n"
+            "Что сюда относится:\n"
+            "- ICS для календаря\n"
+            "- картинка расписания\n"
+            "- видео и подкасты занятий\n\n"
+            "Если нужно загрузить PDF/DOCX/PPTX/TXT, по которым ИИ должен отвечать, используй «Админ: загрузить материал для ИИ».",
+            reply_markup=admin_tech_files_keyboard(),
+            parse_mode=None,
+        )
+
+    @router.message(F.text == "Техфайл: картинка расписания")
+    async def admin_schedule_image_upload_prompt_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            return
+        await state.update_data(
+            media_type="schedule_image",
+            media_module_number=None,
+            media_module_title="Расписание Лиги Лидеров",
+            media_lesson_key="schedule",
+            media_lesson_date=None,
+        )
+        await state.set_state(AdminFlow.waiting_for_media_file)
+        await message.answer(
+            "Пришли картинку расписания.\n\n"
+            "Она будет показываться пользователю в разделе «Расписание Лиги Лидеров». "
+            "ИИ на эту картинку смотреть не будет.",
+            reply_markup=admin_menu_keyboard(),
+            parse_mode=None,
+        )
+
+    @router.message(F.text == "Техфайл: видео/подкаст")
     @router.message(F.text == "Админ: загрузить медиа")
     async def admin_media_upload_start_handler(message: Message, state: FSMContext) -> None:
         if not await require_admin(message):
             return
         await state.set_state(AdminFlow.waiting_for_media_type)
         await message.answer(
-            "Запускаю мастер загрузки медиа.\n\n"
+            "Запускаю мастер загрузки видео/подкаста.\n\n"
+            "Эти файлы бот будет отдавать пользователям как материалы, но ИИ не будет использовать их как источник ответа.\n\n"
             "Шаг 1 из 4: выбери тип файла.",
             reply_markup=admin_media_type_keyboard(),
+            parse_mode=None,
         )
 
     @router.message(AdminFlow.waiting_for_media_type, F.text.in_(["Медиа: видео", "Медиа: подкаст", "Медиа: картинка"]))
@@ -2208,7 +2431,7 @@ def build_main_router(container: AppContainer) -> Router:
         lesson_date_raw = state_data.get("media_lesson_date")
         lesson_date = date.fromisoformat(lesson_date_raw) if lesson_date_raw else None
         if media_type not in {"video", "podcast", "image", "schedule_image"}:
-            await message.answer("Не понял тип медиа. Начни заново через «Админ: загрузить медиа».", reply_markup=admin_menu_keyboard())
+            await message.answer("Не понял тип медиа. Начни заново через «Админ: техфайлы».", reply_markup=admin_menu_keyboard())
             await state.clear()
             return
 
@@ -2484,12 +2707,7 @@ def build_main_router(container: AppContainer) -> Router:
         )
         await message.answer("\n".join(lines), reply_markup=admin_menu_keyboard(), parse_mode=None)
 
-    @router.message(Command("export_csv"))
-    @router.message(F.text == "Админ: выгрузка CSV")
-    async def admin_export_csv_handler(message: Message) -> None:
-        if not await require_admin(message):
-            return
-
+    async def send_admin_csv_files(message: Message) -> None:
         async with SessionLocal() as session:
             user_rows = await UserEventRepository.user_activity_rows(session, limit=1000)
             button_stats = await UserEventRepository.top_events(
@@ -2542,6 +2760,22 @@ def build_main_router(container: AppContainer) -> Router:
             caption="Клики по кнопкам и команды.",
             reply_markup=admin_menu_keyboard(),
         )
+
+    @router.callback_query(F.data == "admin:export_csv")
+    async def admin_export_csv_callback(callback: CallbackQuery) -> None:
+        if not is_admin_user_id(callback.from_user.id):
+            await callback.answer("Эта кнопка доступна только администратору.", show_alert=True)
+            return
+        await callback.answer("Готовлю CSV.")
+        if callback.message:
+            await send_admin_csv_files(callback.message)
+
+    @router.message(Command("export_csv"))
+    @router.message(F.text == "Админ: выгрузка CSV")
+    async def admin_export_csv_handler(message: Message) -> None:
+        if not await require_admin(message):
+            return
+        await send_admin_csv_files(message)
 
     @router.message(F.text == "Админ: расходы")
     async def admin_costs_handler(message: Message) -> None:
@@ -2609,14 +2843,14 @@ def build_main_router(container: AppContainer) -> Router:
         await message.answer(await build_admin_status_report(), reply_markup=admin_menu_keyboard(), parse_mode=None)
 
     @router.message(Command("upload_ics"))
-    @router.message(F.text == "Админ: загрузить ICS")
+    @router.message(F.text.in_(["Техфайл: ICS календаря", "Админ: загрузить ICS"]))
     async def admin_upload_ics_prompt_handler(message: Message, state: FSMContext) -> None:
         if not await require_admin(message):
             return
         await state.set_state(AdminFlow.waiting_for_notification_ics)
         await message.answer(
-            "Пришли файл `.ics`, который нужно прикладывать к уведомлениям.\n\n"
-            "Это не материал для RAG, бот просто сохранит календарный файл и будет отправлять его вместе с уведомлением.",
+            "Пришли файл `.ics`.\n\n"
+            "Это технический файл календаря: бот сохранит его отдельно, ИИ на него смотреть не будет.",
             reply_markup=admin_menu_keyboard(),
             parse_mode=None,
         )
@@ -2692,6 +2926,8 @@ def build_main_router(container: AppContainer) -> Router:
 
         lines = ["Редактируемые тексты:"]
         for key, label in BOT_TEXT_LABELS.items():
+            if key == NOTIFICATION_TEXT_KEY:
+                continue
             marker = "изменён" if key in custom_texts else "по умолчанию"
             lines.append(f"- {label}: {marker}")
         lines.append("")
@@ -2704,7 +2940,6 @@ def build_main_router(container: AppContainer) -> Router:
                 "Изменить приветствие",
                 "Изменить помощь",
                 "Изменить расписание",
-                "Изменить текст уведомления",
             ]
         )
     )
@@ -2715,7 +2950,6 @@ def build_main_router(container: AppContainer) -> Router:
             "Изменить приветствие": "welcome",
             "Изменить помощь": "help",
             "Изменить расписание": "schedule",
-            "Изменить текст уведомления": NOTIFICATION_TEXT_KEY,
         }
         key = mapping[message.text]
         current_value = await get_bot_text(key)
@@ -2727,6 +2961,17 @@ def build_main_router(container: AppContainer) -> Router:
             reply_markup=admin_texts_keyboard(),
             parse_mode=None,
             link_preview_options=NO_LINK_PREVIEW,
+        )
+
+    @router.message(F.text == "Изменить текст уведомления")
+    async def admin_legacy_notification_text_handler(message: Message) -> None:
+        if not await require_admin(message):
+            return
+        await message.answer(
+            "Этот старый текст больше не используется в автоматической рассылке.\n\n"
+            "Автоуведомления теперь собираются только из расписания событий и дедлайнов домашних заданий.",
+            reply_markup=admin_menu_keyboard(),
+            parse_mode=None,
         )
 
     @router.message(AdminFlow.waiting_for_bot_text, F.text)
