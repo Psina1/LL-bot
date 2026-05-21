@@ -180,7 +180,7 @@ class ChatService:
         sources = rag_context.sources
         if not rag_context.context_text:
             answer_text = (
-                f"Я не нашёл готовый материал с id={document_id} или у тебя нет доступа к нему.\n\n"
+                "Я не нашёл этот материал или у тебя нет доступа к нему.\n\n"
                 "Проверь список через «Материалы программы» -> «Записи и материалы занятий»."
             )
             message = await MessageRepository.create(

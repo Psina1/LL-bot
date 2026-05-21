@@ -102,7 +102,7 @@ THINKING_MESSAGES = [
 FILE_PROCESSING_MESSAGES = [
     "Разбираю файл...",
     "Достаю текст из документа...",
-    "Режу материал на фрагменты...",
+    "Готовлю материал для вопросов...",
     "Складываю файл в личный контекст...",
 ]
 
@@ -763,26 +763,22 @@ def build_main_router(container: AppContainer) -> Router:
         if not docs:
             await message.answer(
                 "Материалы программы пока не загружены.\n\n"
-                "Как только администратор добавит файлы занятий, я смогу показывать их здесь "
-                "и отвечать по ним с источниками.",
+                "Когда организаторы добавят материалы занятий, они появятся здесь.",
                 reply_markup=user_main_menu(),
             )
             return
 
         lines = [
-            "Загруженные материалы:",
+            "Материалы программы:",
             "",
         ]
         for doc in docs[:20]:
-            module_hint = f"урок/модуль {doc.module_number}" if doc.module_number else "общий материал"
-            type_hint = doc.material_type or "без типа"
-            lesson_hint = doc.lesson_key or "no-key"
-            lines.append(f"- id={doc.id} | {doc.title} | {module_hint} | {type_hint} | {lesson_hint}")
+            lesson_hint = f" ({format_lesson_date(doc.lesson_date)})" if doc.lesson_date else ""
+            lines.append(f"- {doc.title}{lesson_hint}")
         lines.extend(
             [
                 "",
-                "Чтобы спросить по конкретному файлу, напиши так:",
-                f"материал {docs[0].id}: кратко что в этом файле?",
+                "Можешь задать вопрос по любому из этих материалов обычным сообщением.",
             ]
         )
         await message.answer("\n".join(lines), reply_markup=user_main_menu())
@@ -823,8 +819,7 @@ def build_main_router(container: AppContainer) -> Router:
 
         if not docs and not media_items and not homeworks:
             await message.answer(
-                f"Я не нашёл загруженных материалов по запросу: {lookup_text}.\n\n"
-                "Возможно, материал ещё не загружен или у него не проставлена дата/привязка к уроку.",
+                f"Материалы по запросу «{lookup_text}» пока не добавлены.",
                 reply_markup=user_main_menu(),
             )
             return True
@@ -836,14 +831,12 @@ def build_main_router(container: AppContainer) -> Router:
             ]
             for doc in docs[:20]:
                 date_hint = format_lesson_date(doc.lesson_date)
-                module_hint = f"урок/модуль {doc.module_number}" if doc.module_number else "общий материал"
-                type_hint = doc.material_type or "без типа"
-                lines.append(f"- id={doc.id} | {doc.title} | {module_hint} | {date_hint} | {type_hint}")
+                date_suffix = f" ({date_hint})" if date_hint != "без даты" else ""
+                lines.append(f"- {doc.title}{date_suffix}")
             lines.extend(
                 [
                     "",
-                    "Чтобы спросить по конкретному файлу, напиши так:",
-                    f"материал {docs[0].id}: кратко что в этом файле?",
+                    "Можешь задать вопрос по этим материалам обычным сообщением.",
                 ]
             )
             await message.answer("\n".join(lines), reply_markup=user_main_menu())
@@ -854,7 +847,7 @@ def build_main_router(container: AppContainer) -> Router:
                 "",
             ]
             for homework in homeworks[:20]:
-                lines.append(f"- id={homework.id} | {homework.title} | {homework_lesson_label(homework)}")
+                lines.append(f"- {homework.title} ({homework_lesson_label(homework)})")
             lines.append("")
             lines.append("Выбери нужное задание кнопкой ниже.")
             await message.answer("\n".join(lines), reply_markup=homework_list_keyboard(homeworks))
@@ -902,7 +895,7 @@ def build_main_router(container: AppContainer) -> Router:
             logger.exception("send_media_asset_failed")
             await message.answer(
                 f"Не получилось отправить файл «{media.title}». "
-                "Возможно, Telegram больше не принимает этот file_id. Админу нужно загрузить файл заново."
+                "Попробуй открыть раздел материалов ещё раз или напиши организаторам."
             )
 
     async def show_media_picker(
@@ -1011,7 +1004,7 @@ def build_main_router(container: AppContainer) -> Router:
         if not homeworks:
             await message.answer(
                 "Домашние задания пока не добавлены.\n\n"
-                "Когда администратор загрузит файл как `Тип: домашнее задание`, он появится здесь.",
+                "Когда организаторы добавят ДЗ, они появятся здесь.",
                 reply_markup=homework_list_keyboard([]),
                 parse_mode=None,
             )
@@ -1019,7 +1012,7 @@ def build_main_router(container: AppContainer) -> Router:
 
         lines = ["Список домашних заданий:", ""]
         for homework in homeworks[:20]:
-            lines.append(f"- id={homework.id} | {homework.title} | {homework_lesson_label(homework)}")
+            lines.append(f"- {homework.title} ({homework_lesson_label(homework)})")
         lines.extend(["", "Выбери задание кнопкой ниже или задай свой вопрос по домашке."])
         await message.answer("\n".join(lines), reply_markup=homework_list_keyboard(homeworks))
 
@@ -1041,7 +1034,7 @@ def build_main_router(container: AppContainer) -> Router:
         if homework.moodle_url:
             lines.extend(["", f"Ссылка для сдачи: {escape(homework.moodle_url)}"])
         if homework.document_id:
-            lines.extend(["", f"Файл задания сохранён как материал id={homework.document_id}."])
+            lines.extend(["", "Файл задания прикреплён к этому ДЗ."])
         await message.answer("\n".join(lines), reply_markup=homework_detail_keyboard(homework.id))
 
     async def start_homework_help(message: Message, state: FSMContext, homework_id: int | None = None) -> None:
@@ -1049,7 +1042,7 @@ def build_main_router(container: AppContainer) -> Router:
         await state.update_data(selected_homework_id=homework_id)
         suffix = ""
         if homework_id:
-            suffix = f"\n\nЯ буду учитывать домашнее задание id={homework_id}."
+            suffix = "\n\nЯ буду учитывать выбранное домашнее задание."
         await message.answer(
             f"{HOMEWORK_HELP_PROMPT}{suffix}",
             reply_markup=user_main_menu(),
@@ -2591,7 +2584,10 @@ def build_main_router(container: AppContainer) -> Router:
             media = await ProgramMediaRepository.get_by_id(session, media_id)
 
         if media is None or media.media_type != media_type:
-            await callback.message.answer("Этот файл не найден. Возможно, админ загрузит его заново.", reply_markup=user_main_menu())
+            await callback.message.answer(
+                "Этот файл не найден. Попробуй открыть раздел материалов ещё раз.",
+                reply_markup=user_main_menu(),
+            )
             return
 
         await send_media_asset(callback.message, media)
@@ -2617,7 +2613,7 @@ def build_main_router(container: AppContainer) -> Router:
         video_url = (container.settings.video_library_url or "").strip()
         if not video_url:
             await message.answer(
-                "Видео-раздел включён, но ссылка на видеотеку ещё не настроена. Проверь VIDEO_LIBRARY_URL в .env.",
+                "Видео-раздел скоро появится. Пока ссылка на записи не добавлена.",
                 reply_markup=materials_menu_keyboard(),
             )
             return
@@ -2850,10 +2846,10 @@ def build_main_router(container: AppContainer) -> Router:
                     rag_document_ids = None
         else:
             await message.answer(
-                "Домашние задания пока не добавлены в бот.\n\n"
+                "Домашние задания пока не добавлены.\n\n"
                 "Входная диагностика и тестирования после кикофа не считаются домашним заданием, "
-                "пока организаторы отдельно не добавили их в раздел ДЗ.\n\n"
-                "Если вопрос срочный, лучше уточнить его в общем чате программы или у организаторов.",
+                "если организаторы отдельно не обозначили это как ДЗ.\n\n"
+                "Если сомневаешься, лучше уточнить вопрос в общем чате программы или у организаторов.",
                 reply_markup=homework_program_keyboard(),
             )
             await state.clear()
@@ -3071,7 +3067,7 @@ def build_main_router(container: AppContainer) -> Router:
         except Exception as exc:
             logger.exception("user_upload_failed")
             await ErrorRepository.create(session, context="user_upload", error_text=str(exc), user_id=user.id)
-            await message.answer("Не получилось обработать файл. Попробуй другой файл или обратись к администратору.")
+            await message.answer("Не получилось обработать файл. Попробуй другой файл или напиши организаторам.")
         finally:
             await _delete_message_safely(processing_message)
             await session.close()
