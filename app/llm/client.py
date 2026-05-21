@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 import hashlib
 import random
@@ -68,6 +69,58 @@ class LLMClient:
             input=text,
         )
         return list(response.data[0].embedding)
+
+    async def extract_text_from_image(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        label: str,
+    ) -> str:
+        if self.settings.llm_provider == "mock":
+            return ""
+
+        if self.client is None:
+            raise RuntimeError("LLM client is not initialized")
+
+        encoded_image = base64.b64encode(image_bytes).decode("ascii")
+        response = await self.client.chat.completions.create(
+            model=self.settings.openai_ocr_model or self.settings.openai_chat_model,
+            temperature=0,
+            max_tokens=1200,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты OCR-движок. Извлекай только видимый текст с изображения. "
+                        "Не пересказывай, не объясняй и не добавляй факты от себя. "
+                        "Сохраняй русский язык, важные заголовки, списки, даты и контакты. "
+                        "Если читаемого текста нет, верни пустую строку."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                f"Источник: {label}.\n"
+                                "Распознай весь читаемый текст на изображении. "
+                                "Верни только текст, без Markdown-обвязки."
+                            ),
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{encoded_image}",
+                                "detail": "high",
+                            },
+                        },
+                    ],
+                },
+            ],
+        )
+        answer = response.choices[0].message.content or ""
+        return answer.strip()
 
     def _mock_chat_completion(self, user_prompt: str) -> ChatResult:
         question = self._extract_question(user_prompt)

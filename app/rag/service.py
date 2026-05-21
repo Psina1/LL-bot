@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings
 from app.db.models import Document, DocumentStatusEnum
 from app.db.repositories import ChunkMatch, ChunkRepository, DocumentRepository
-from app.file_processing.extractors import extract_text_from_file
+from app.file_processing.extractors import TextExtractionError, clean_text, extract_text_from_file
+from app.file_processing.ocr_images import OCRImage, extract_pptx_images_for_ocr
 from app.llm.client import LLMClient
 from app.rag.chunking import split_text
 
@@ -30,7 +31,7 @@ class RAGService:
         await DocumentRepository.set_status(session, document.id, DocumentStatusEnum.processing)
         try:
             file_path = Path(document.stored_path)
-            text = extract_text_from_file(file_path)
+            text = await self._extract_text_with_ocr_fallback(file_path)
             chunks = split_text(text, chunk_size=1200, overlap=150)
             payload: list[dict[str, Any]] = []
 
@@ -61,6 +62,75 @@ class RAGService:
         except Exception as exc:
             await DocumentRepository.set_status(session, document.id, DocumentStatusEnum.error, str(exc))
             raise
+
+    async def _extract_text_with_ocr_fallback(self, file_path: Path) -> str:
+        extracted_text = ""
+        extraction_error: TextExtractionError | None = None
+        try:
+            extracted_text = extract_text_from_file(file_path)
+        except TextExtractionError as exc:
+            extraction_error = exc
+
+        if not self._should_try_ocr(file_path, extracted_text):
+            if extraction_error is not None:
+                raise extraction_error
+            return extracted_text
+
+        ocr_text = await self._extract_ocr_text(file_path)
+        combined_text = clean_text(
+            "\n\n".join(
+                part
+                for part in [
+                    extracted_text,
+                    "Текст, распознанный со слайдов:\n" + ocr_text if ocr_text else "",
+                ]
+                if part
+            )
+        )
+        if combined_text:
+            return combined_text
+
+        if extraction_error is not None:
+            raise extraction_error
+        raise TextExtractionError("Не удалось извлечь текст из файла")
+
+    def _should_try_ocr(self, file_path: Path, extracted_text: str) -> bool:
+        if not self.settings.ocr_enabled:
+            return False
+        if file_path.suffix.lower() != ".pptx":
+            return False
+        return len(extracted_text.strip()) < self.settings.ocr_min_text_chars
+
+    async def _extract_ocr_text(self, file_path: Path) -> str:
+        images = extract_pptx_images_for_ocr(
+            file_path,
+            max_images=self.settings.ocr_max_images_per_document,
+            max_image_bytes=self.settings.ocr_max_image_size_mb * 1024 * 1024,
+            min_width=self.settings.ocr_min_image_width,
+            min_height=self.settings.ocr_min_image_height,
+        )
+        if not images:
+            return ""
+
+        parts: list[str] = []
+        for image in images:
+            try:
+                text = await self._extract_single_image_text(image)
+            except Exception:
+                # OCR is a quality fallback. A single bad/oversized slide should not
+                # break indexing if the document still has extractable text.
+                continue
+            if text:
+                parts.append(f"{image.label}\n{text}")
+        return clean_text("\n\n".join(parts))
+
+    async def _extract_single_image_text(self, image: OCRImage) -> str:
+        text = await self.llm_client.extract_text_from_image(
+            image_bytes=image.data,
+            mime_type=image.mime_type,
+            label=image.label,
+        )
+        return clean_text(text)
 
     async def build_context_for_question(
         self,

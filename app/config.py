@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_chat_model: str = Field(default="gpt-4o-mini", alias="OPENAI_CHAT_MODEL")
     openai_embedding_model: str = Field(default="text-embedding-3-small", alias="OPENAI_EMBEDDING_MODEL")
+    openai_ocr_model: str | None = Field(default=None, alias="OPENAI_OCR_MODEL")
     llm_base_url: str | None = Field(default=None, alias="LLM_BASE_URL")
 
     bot_mode: Literal["polling"] = Field(default="polling", alias="BOT_MODE")
@@ -41,6 +42,12 @@ class Settings(BaseSettings):
     max_user_questions_per_minute: int = Field(default=10, alias="MAX_USER_QUESTIONS_PER_MINUTE")
     temperature: float = Field(default=0.2, alias="TEMPERATURE")
     embedding_dimensions: int = Field(default=1536, alias="EMBEDDING_DIMENSIONS")
+    ocr_enabled: bool = Field(default=True, alias="OCR_ENABLED")
+    ocr_min_text_chars: int = Field(default=500, alias="OCR_MIN_TEXT_CHARS")
+    ocr_max_images_per_document: int = Field(default=30, alias="OCR_MAX_IMAGES_PER_DOCUMENT")
+    ocr_max_image_size_mb: int = Field(default=8, alias="OCR_MAX_IMAGE_SIZE_MB")
+    ocr_min_image_width: int = Field(default=600, alias="OCR_MIN_IMAGE_WIDTH")
+    ocr_min_image_height: int = Field(default=350, alias="OCR_MIN_IMAGE_HEIGHT")
 
     vm_rub_per_hour: float = Field(default=4.60, alias="VM_RUB_PER_HOUR")
     vm_billing_started_at: str | None = Field(default=None, alias="VM_BILLING_STARTED_AT")
