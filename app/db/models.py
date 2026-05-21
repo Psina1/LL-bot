@@ -71,6 +71,7 @@ class User(Base):
 
     messages: Mapped[list["Message"]] = relationship(back_populates="user")
     user_files: Mapped[list["UserFile"]] = relationship(back_populates="user")
+    events: Mapped[list["UserEvent"]] = relationship(back_populates="user")
 
 
 class AllowedUser(Base):
@@ -185,6 +186,30 @@ class MessageFeedback(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (UniqueConstraint("message_id", "user_id", name="uq_message_feedback_message_user"),)
+
+
+class UserEvent(Base):
+    __tablename__ = "user_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(50), index=True)
+    event_name: Mapped[str] = mapped_column(String(255), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB().with_variant(JSON, "sqlite"),
+        default=dict,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped["User"] = relationship(back_populates="events")
+
+    __table_args__ = (
+        Index("ix_user_events_type_created", "event_type", "created_at"),
+        Index("ix_user_events_name_created", "event_name", "created_at"),
+        Index("ix_user_events_telegram_created", "telegram_id", "created_at"),
+    )
 
 
 class UserNotificationSetting(Base):

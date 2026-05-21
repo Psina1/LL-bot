@@ -24,6 +24,7 @@ from app.db.models import (
     ProgramMedia,
     RoleEnum,
     User,
+    UserEvent,
     UserFile,
     UserNotificationSetting,
     VisibilityEnum,
@@ -82,6 +83,11 @@ class UserRepository:
     async def get_by_telegram_id(session: AsyncSession, telegram_id: int) -> User | None:
         result = await session.execute(select(User).where(User.telegram_id == telegram_id))
         return result.scalar_one_or_none()
+
+    @staticmethod
+    async def list_recent(session: AsyncSession, limit: int = 20) -> list[User]:
+        result = await session.execute(select(User).order_by(User.created_at.desc()).limit(limit))
+        return list(result.scalars().all())
 
     @staticmethod
     async def update_project_context(session: AsyncSession, user_id: int, project_context: str) -> None:
@@ -153,6 +159,179 @@ class MessageFeedbackRepository:
         )
         result = await session.execute(stmt)
         return {str(reason): int(count or 0) for reason, count in result.all()}
+
+
+@dataclass(slots=True)
+class EventStat:
+    event_type: str
+    event_name: str
+    count: int
+
+
+@dataclass(slots=True)
+class UserActivityRow:
+    telegram_id: int
+    username: str | None
+    full_name: str | None
+    role: str
+    created_at: datetime
+    last_event_at: datetime | None
+    messages_count: int
+    button_events_count: int
+
+
+class UserEventRepository:
+    @staticmethod
+    async def create(
+        session: AsyncSession,
+        telegram_id: int,
+        username: str | None,
+        event_type: str,
+        event_name: str,
+        user_id: int | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> UserEvent:
+        event = UserEvent(
+            user_id=user_id,
+            telegram_id=telegram_id,
+            username=username,
+            event_type=event_type,
+            event_name=event_name[:255],
+            payload=payload or {},
+        )
+        session.add(event)
+        await session.commit()
+        await session.refresh(event)
+        return event
+
+    @staticmethod
+    async def top_events(
+        session: AsyncSession,
+        event_types: list[str],
+        since: datetime | None = None,
+        limit: int = 10,
+        exclude_telegram_ids: list[int] | None = None,
+    ) -> list[EventStat]:
+        filters = [UserEvent.event_type.in_(event_types)]
+        if since is not None:
+            filters.append(UserEvent.created_at >= since)
+        if exclude_telegram_ids:
+            filters.append(~UserEvent.telegram_id.in_(exclude_telegram_ids))
+
+        stmt = (
+            select(UserEvent.event_type, UserEvent.event_name, func.count(UserEvent.id).label("count"))
+            .where(and_(*filters))
+            .group_by(UserEvent.event_type, UserEvent.event_name)
+            .order_by(func.count(UserEvent.id).desc(), UserEvent.event_name.asc())
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return [EventStat(event_type=row[0], event_name=row[1], count=int(row[2] or 0)) for row in result.all()]
+
+    @staticmethod
+    async def event_counts_by_name(
+        session: AsyncSession,
+        event_names: list[str],
+        since: datetime | None = None,
+        exclude_telegram_ids: list[int] | None = None,
+    ) -> dict[str, int]:
+        if not event_names:
+            return {}
+        filters = [UserEvent.event_name.in_(event_names)]
+        if since is not None:
+            filters.append(UserEvent.created_at >= since)
+        if exclude_telegram_ids:
+            filters.append(~UserEvent.telegram_id.in_(exclude_telegram_ids))
+
+        stmt = (
+            select(UserEvent.event_name, func.count(UserEvent.id))
+            .where(and_(*filters))
+            .group_by(UserEvent.event_name)
+        )
+        result = await session.execute(stmt)
+        return {str(name): int(count or 0) for name, count in result.all()}
+
+    @staticmethod
+    async def active_users_since(
+        session: AsyncSession,
+        since: datetime,
+        exclude_telegram_ids: list[int] | None = None,
+    ) -> int:
+        filters = [UserEvent.created_at >= since]
+        if exclude_telegram_ids:
+            filters.append(~UserEvent.telegram_id.in_(exclude_telegram_ids))
+        result = await session.execute(
+            select(func.count(func.distinct(UserEvent.telegram_id))).where(and_(*filters))
+        )
+        return int(result.scalar() or 0)
+
+    @staticmethod
+    async def count_events_since(
+        session: AsyncSession,
+        since: datetime,
+        event_types: list[str] | None = None,
+        exclude_telegram_ids: list[int] | None = None,
+    ) -> int:
+        filters = [UserEvent.created_at >= since]
+        if event_types:
+            filters.append(UserEvent.event_type.in_(event_types))
+        if exclude_telegram_ids:
+            filters.append(~UserEvent.telegram_id.in_(exclude_telegram_ids))
+        result = await session.execute(select(func.count(UserEvent.id)).where(and_(*filters)))
+        return int(result.scalar() or 0)
+
+    @staticmethod
+    async def user_activity_rows(session: AsyncSession, limit: int = 500) -> list[UserActivityRow]:
+        last_event_subquery = (
+            select(UserEvent.telegram_id, func.max(UserEvent.created_at).label("last_event_at"))
+            .group_by(UserEvent.telegram_id)
+            .subquery()
+        )
+        button_count_subquery = (
+            select(UserEvent.telegram_id, func.count(UserEvent.id).label("button_events_count"))
+            .where(UserEvent.event_type.in_(["reply_button", "inline_button"]))
+            .group_by(UserEvent.telegram_id)
+            .subquery()
+        )
+        message_count_subquery = (
+            select(Message.user_id, func.count(Message.id).label("messages_count"))
+            .group_by(Message.user_id)
+            .subquery()
+        )
+        stmt = (
+            select(
+                User.telegram_id,
+                User.username,
+                User.full_name,
+                User.role,
+                User.created_at,
+                last_event_subquery.c.last_event_at,
+                func.coalesce(message_count_subquery.c.messages_count, 0),
+                func.coalesce(button_count_subquery.c.button_events_count, 0),
+            )
+            .outerjoin(last_event_subquery, last_event_subquery.c.telegram_id == User.telegram_id)
+            .outerjoin(message_count_subquery, message_count_subquery.c.user_id == User.id)
+            .outerjoin(button_count_subquery, button_count_subquery.c.telegram_id == User.telegram_id)
+            .order_by(User.created_at.desc())
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        rows: list[UserActivityRow] = []
+        for row in result.all():
+            role_value = row[3].value if hasattr(row[3], "value") else str(row[3])
+            rows.append(
+                UserActivityRow(
+                    telegram_id=int(row[0]),
+                    username=row[1],
+                    full_name=row[2],
+                    role=role_value,
+                    created_at=row[4],
+                    last_event_at=row[5],
+                    messages_count=int(row[6] or 0),
+                    button_events_count=int(row[7] or 0),
+                )
+            )
+        return rows
 
 
 @dataclass(slots=True)

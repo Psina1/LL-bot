@@ -57,6 +57,7 @@ ADMIN_MENU_BUTTONS = [
     [KeyboardButton(text="Админ: статус")],
     [KeyboardButton(text="Админ: загрузить материал"), KeyboardButton(text="Админ: материалы")],
     [KeyboardButton(text="Админ: тексты"), KeyboardButton(text="Админ: статистика")],
+    [KeyboardButton(text="Админ: аналитика"), KeyboardButton(text="Админ: выгрузка CSV")],
     [KeyboardButton(text="Админ: напоминание"), KeyboardButton(text="Админ: загрузить ICS")],
     [KeyboardButton(text="Админ: загрузить медиа"), KeyboardButton(text="Админ: расходы")],
     [KeyboardButton(text="Главное меню")],
@@ -161,6 +162,35 @@ def notification_settings_keyboard() -> ReplyKeyboardMarkup:
 
 def admin_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=ADMIN_MENU_BUTTONS, resize_keyboard=True)
+
+
+def all_reply_button_labels() -> set[str]:
+    keyboard_groups = [
+        MAIN_MENU_BUTTONS,
+        [PROJECT_CONTEXT_MENU_BUTTON],
+        PROJECT_CONTEXT_BUTTONS,
+        MATERIALS_SEASON_BUTTONS,
+        MATERIALS_TYPE_BUTTONS,
+        [VIDEO_LIBRARY_BUTTON],
+        HOMEWORK_MENU_BUTTONS,
+        PROJECT_HELP_BUTTONS,
+        NOTIFICATION_SETTINGS_BUTTONS,
+        ADMIN_MENU_BUTTONS,
+        ADMIN_TEXTS_BUTTONS,
+        ADMIN_MATERIAL_SEASON_BUTTONS,
+        ADMIN_MATERIAL_MODULE_BUTTONS,
+        ADMIN_MATERIAL_TYPE_BUTTONS,
+        ADMIN_LESSON_DATE_BUTTONS,
+        ADMIN_HOMEWORK_LINK_BUTTONS,
+        ADMIN_MEDIA_TYPE_BUTTONS,
+        ADMIN_MEDIA_MODULE_BUTTONS,
+    ]
+    labels: set[str] = set()
+    for keyboard in keyboard_groups:
+        for row in keyboard:
+            for button in row:
+                labels.add(button.text)
+    return labels
 
 
 def admin_texts_keyboard() -> ReplyKeyboardMarkup:

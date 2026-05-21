@@ -4,6 +4,8 @@ import logging
 import random
 import re
 import time
+import csv
+from io import StringIO
 from datetime import date, datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
@@ -13,7 +15,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, KeyboardButton, LinkPreviewOptions, Message, ReplyKeyboardMarkup
+from aiogram.types import BufferedInputFile, CallbackQuery, KeyboardButton, LinkPreviewOptions, Message, ReplyKeyboardMarkup
 from sqlalchemy import text
 
 from app.bot.keyboards.reply import (
@@ -66,6 +68,7 @@ from app.bot.texts import (
     VIDEO_LIBRARY_DISABLED_TEXT,
 )
 from app.db.repositories import (
+    AllowedUserRepository,
     AppSettingRepository,
     BotTextRepository,
     DocumentRepository,
@@ -77,6 +80,7 @@ from app.db.repositories import (
     ProgramMediaRepository,
     UserNotificationSettingRepository,
     StatsRepository,
+    UserEventRepository,
     UserRepository,
 )
 from app.db.session import SessionLocal
@@ -110,6 +114,40 @@ GROUP_CHAT_TYPES = {"group", "supergroup"}
 ANNOUNCEMENT_CHAT_ID_KEY = "announcement_chat_id"
 ANNOUNCEMENT_CHAT_TITLE_KEY = "announcement_chat_title"
 NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
+USER_ANALYTICS_BUTTONS = [
+    "Задать вопрос",
+    "Вопрос по программе",
+    "Технический вопрос",
+    "Другое",
+    "Материалы программы",
+    "Материалы: записи и материалы",
+    "Материалы: текстовые материалы",
+    "Материалы: подкасты",
+    "Материалы: саммари",
+    "Домашние задания",
+    "Домашние задания: список",
+    "Домашние задания: помощь",
+    "Расписание Лиги Лидеров",
+    "Расписание: сезон",
+    "Расписание: блок",
+    "Расписание: занятие",
+    "Расписание: материалы занятия",
+    "Настройки уведомлений",
+    "Старт: выбор времени уведомлений",
+    "Уведомления: 09:00",
+    "Уведомления: 12:00",
+    "Уведомления: 15:00",
+    "Уведомления: отключить",
+    "Главное меню",
+]
+
+
+def _format_admin_datetime(value: datetime | None) -> str:
+    if value is None:
+        return "-"
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc)
+    return value.strftime("%Y-%m-%d %H:%M")
 
 
 def _shorten_project_context(project_context: str, limit: int = 900) -> str:
@@ -2078,6 +2116,176 @@ def build_main_router(container: AppContainer) -> Router:
         else:
             lines.append("- Ошибок нет")
         await message.answer("\n".join(lines), reply_markup=admin_menu_keyboard(), parse_mode=None)
+
+    @router.message(Command("analytics"))
+    @router.message(F.text == "Админ: аналитика")
+    async def admin_analytics_handler(message: Message) -> None:
+        if not await require_admin(message):
+            return
+
+        now = datetime.now(timezone.utc)
+        since_24h = now - timedelta(days=1)
+        since_7d = now - timedelta(days=7)
+        exclude_admin_ids = container.settings.admin_ids
+
+        async with SessionLocal() as session:
+            allowed_count = await AllowedUserRepository.count_active(session)
+            recent_users = await UserRepository.list_recent(session, limit=10)
+            active_24h = await UserEventRepository.active_users_since(
+                session,
+                since_24h,
+                exclude_telegram_ids=exclude_admin_ids,
+            )
+            active_7d = await UserEventRepository.active_users_since(
+                session,
+                since_7d,
+                exclude_telegram_ids=exclude_admin_ids,
+            )
+            button_events_24h = await UserEventRepository.count_events_since(
+                session,
+                since_24h,
+                event_types=["reply_button", "inline_button"],
+                exclude_telegram_ids=exclude_admin_ids,
+            )
+            button_events_7d = await UserEventRepository.count_events_since(
+                session,
+                since_7d,
+                event_types=["reply_button", "inline_button"],
+                exclude_telegram_ids=exclude_admin_ids,
+            )
+            top_24h = await UserEventRepository.top_events(
+                session,
+                ["reply_button", "inline_button"],
+                since=since_24h,
+                limit=10,
+                exclude_telegram_ids=exclude_admin_ids,
+            )
+            top_7d = await UserEventRepository.top_events(
+                session,
+                ["reply_button", "inline_button"],
+                since=since_7d,
+                limit=10,
+                exclude_telegram_ids=exclude_admin_ids,
+            )
+            button_counts_7d = await UserEventRepository.event_counts_by_name(
+                session,
+                USER_ANALYTICS_BUTTONS,
+                since=since_7d,
+                exclude_telegram_ids=exclude_admin_ids,
+            )
+
+        quiet_buttons = [button for button in USER_ANALYTICS_BUTTONS if button_counts_7d.get(button, 0) == 0]
+        lines = [
+            "Админ-аналитика:",
+            "",
+            "Пользователи:",
+            f"- в allowlist: {allowed_count}",
+            f"- активных за 24ч: {active_24h}",
+            f"- активных за 7д: {active_7d}",
+            "",
+            "Клики по кнопкам:",
+            f"- за 24ч: {button_events_24h}",
+            f"- за 7д: {button_events_7d}",
+            "",
+            "Топ кнопок за 24ч:",
+        ]
+        if top_24h:
+            for stat in top_24h:
+                lines.append(f"- {stat.event_name}: {stat.count}")
+        else:
+            lines.append("- пока нет данных")
+
+        lines.extend(["", "Топ кнопок за 7д:"])
+        if top_7d:
+            for stat in top_7d:
+                lines.append(f"- {stat.event_name}: {stat.count}")
+        else:
+            lines.append("- пока нет данных")
+
+        lines.extend(["", "Почти/совсем не нажимали за 7д:"])
+        if quiet_buttons:
+            for button in quiet_buttons[:12]:
+                lines.append(f"- {button}")
+            if len(quiet_buttons) > 12:
+                lines.append(f"- ещё {len(quiet_buttons) - 12}")
+        else:
+            lines.append("- все ключевые кнопки уже нажимали")
+
+        lines.extend(["", "Последние пользователи, которые зашли в бота:"])
+        if recent_users:
+            for user in recent_users:
+                name = user.full_name or user.username or str(user.telegram_id)
+                username = f"@{user.username}" if user.username else "без username"
+                lines.append(f"- {name} ({username}), id={user.telegram_id}, {_format_admin_datetime(user.created_at)}")
+        else:
+            lines.append("- пока нет пользователей")
+
+        lines.extend(
+            [
+                "",
+                "Важно: клики собираются с момента включения этой аналитики. Старые нажатия из прошлого не восстановить.",
+            ]
+        )
+        await message.answer("\n".join(lines), reply_markup=admin_menu_keyboard(), parse_mode=None)
+
+    @router.message(Command("export_csv"))
+    @router.message(F.text == "Админ: выгрузка CSV")
+    async def admin_export_csv_handler(message: Message) -> None:
+        if not await require_admin(message):
+            return
+
+        async with SessionLocal() as session:
+            user_rows = await UserEventRepository.user_activity_rows(session, limit=1000)
+            button_stats = await UserEventRepository.top_events(
+                session,
+                ["reply_button", "inline_button", "command"],
+                since=None,
+                limit=1000,
+            )
+
+        users_csv = StringIO()
+        writer = csv.writer(users_csv)
+        writer.writerow(
+            [
+                "telegram_id",
+                "username",
+                "full_name",
+                "role",
+                "created_at_utc",
+                "last_activity_utc",
+                "questions_count",
+                "button_events_count",
+            ]
+        )
+        for row in user_rows:
+            writer.writerow(
+                [
+                    row.telegram_id,
+                    row.username or "",
+                    row.full_name or "",
+                    row.role,
+                    _format_admin_datetime(row.created_at),
+                    _format_admin_datetime(row.last_event_at),
+                    row.messages_count,
+                    row.button_events_count,
+                ]
+            )
+
+        buttons_csv = StringIO()
+        writer = csv.writer(buttons_csv)
+        writer.writerow(["event_type", "event_name", "count"])
+        for stat in button_stats:
+            writer.writerow([stat.event_type, stat.event_name, stat.count])
+
+        await message.answer_document(
+            BufferedInputFile(users_csv.getvalue().encode("utf-8-sig"), filename="ll_bot_users.csv"),
+            caption="Пользователи и активность.",
+        )
+        await message.answer_document(
+            BufferedInputFile(buttons_csv.getvalue().encode("utf-8-sig"), filename="ll_bot_buttons.csv"),
+            caption="Клики по кнопкам и команды.",
+            reply_markup=admin_menu_keyboard(),
+        )
 
     @router.message(F.text == "Админ: расходы")
     async def admin_costs_handler(message: Message) -> None:
