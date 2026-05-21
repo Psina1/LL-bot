@@ -55,7 +55,7 @@ NOTIFICATION_SETTINGS_BUTTONS = [
 
 ADMIN_MENU_BUTTONS = [
     [KeyboardButton(text="Админ: обзор")],
-    [KeyboardButton(text="Админ: загрузить материал для ИИ"), KeyboardButton(text="Админ: материалы")],
+    [KeyboardButton(text="Админ: загрузить материал для ИИ и пользователей"), KeyboardButton(text="Админ: материалы")],
     [KeyboardButton(text="Админ: техфайлы"), KeyboardButton(text="Админ: тексты")],
     [KeyboardButton(text="Админ: автоуведомления"), KeyboardButton(text="Админ: ручное сообщение")],
     [KeyboardButton(text="Главное меню")],
@@ -423,7 +423,6 @@ def admin_overview_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Выгрузить CSV", callback_data="admin:export_csv")],
-            [InlineKeyboardButton(text="Автоуведомления", callback_data="admin_notifications:refresh")],
         ]
     )
 

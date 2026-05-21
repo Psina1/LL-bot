@@ -1544,6 +1544,7 @@ def build_main_router(container: AppContainer) -> Router:
         admin_navigation_texts = {
             "Админ: меню",
             "Админ: обзор",
+            "Админ: загрузить материал для ИИ и пользователей",
             "Админ: загрузить материал для ИИ",
             "Админ: статус",
             "Админ: загрузить материал",
@@ -1876,7 +1877,15 @@ def build_main_router(container: AppContainer) -> Router:
         )
 
     @router.message(Command("upload_global_material"))
-    @router.message(F.text.in_(["Админ: загрузить материал для ИИ", "Админ: загрузить материал"]))
+    @router.message(
+        F.text.in_(
+            [
+                "Админ: загрузить материал для ИИ и пользователей",
+                "Админ: загрузить материал для ИИ",
+                "Админ: загрузить материал",
+            ]
+        )
+    )
     async def admin_upload_command(message: Message, state: FSMContext) -> None:
         if not await require_admin(message):
             return
@@ -2190,7 +2199,8 @@ def build_main_router(container: AppContainer) -> Router:
             "- ICS для календаря\n"
             "- картинка расписания\n"
             "- видео и подкасты занятий\n\n"
-            "Если нужно загрузить PDF/DOCX/PPTX/TXT, по которым ИИ должен отвечать, используй «Админ: загрузить материал для ИИ».",
+            "Если нужно загрузить PDF/DOCX/PPTX/TXT, по которым ИИ должен отвечать и которые должны видеть пользователи, "
+            "используй «Админ: загрузить материал для ИИ и пользователей».",
             reply_markup=admin_tech_files_keyboard(),
             parse_mode=None,
         )
