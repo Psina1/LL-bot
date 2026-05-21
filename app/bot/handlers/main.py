@@ -963,12 +963,6 @@ def build_main_router(container: AppContainer) -> Router:
         ]
         if lesson.speaker:
             lines.append(f"Спикер: {lesson.speaker}")
-        if lesson.content_status:
-            lines.append(f"Готовность контента: {lesson.content_status}")
-        if lesson.material_format:
-            lines.append(f"Формат и материалы: {lesson.material_format}")
-        if lesson.hr_moderator_role:
-            lines.append(f"Роль HR-модераторов: {lesson.hr_moderator_role}")
         return "\n".join(lines)
 
     async def build_schedule_text_and_seasons() -> tuple[str, list[tuple[str, str]]]:
@@ -2390,12 +2384,21 @@ def build_main_router(container: AppContainer) -> Router:
     async def schedule_handler(message: Message) -> None:
         await ensure_user(message)
         custom_text = await get_bot_text("schedule")
-        await message.answer(
-            custom_text,
-            reply_markup=user_main_menu(),
-            parse_mode=None,
-            link_preview_options=NO_LINK_PREVIEW,
-        )
+        try:
+            await message.answer(
+                custom_text,
+                reply_markup=user_main_menu(),
+                parse_mode="HTML",
+                link_preview_options=NO_LINK_PREVIEW,
+            )
+        except TelegramBadRequest:
+            logger.exception("schedule_html_message_failed")
+            await message.answer(
+                custom_text,
+                reply_markup=user_main_menu(),
+                parse_mode=None,
+                link_preview_options=NO_LINK_PREVIEW,
+            )
         await send_schedule_image(message)
 
     @router.callback_query(F.data.startswith("schedule:season:"))
@@ -2835,18 +2838,32 @@ def build_main_router(container: AppContainer) -> Router:
                 homework_blocks.append("\n".join(block_lines))
             homework_context = "\n\n".join(homework_blocks)
             first_homework = homeworks[0]
-            rag_lesson_key = first_homework.lesson_key if selected_homework_id else None
-            rag_lesson_date = first_homework.lesson_date if selected_homework_id else None
-            rag_document_ids = [first_homework.document_id] if selected_homework_id and first_homework.document_id else None
+            if selected_homework_id:
+                rag_lesson_key = first_homework.lesson_key
+                rag_lesson_date = first_homework.lesson_date
+                rag_document_ids = [first_homework.document_id] if first_homework.document_id else None
+            else:
+                rag_lesson_key = None
+                rag_lesson_date = None
+                rag_document_ids = [homework.document_id for homework in homeworks if homework.document_id]
+                if not rag_document_ids:
+                    rag_document_ids = None
         else:
-            homework_context = "Домашние задания пока не добавлены в базу."
-            rag_lesson_key = None
-            rag_lesson_date = None
-            rag_document_ids = None
+            await message.answer(
+                "Домашние задания пока не добавлены в бот.\n\n"
+                "Входная диагностика и тестирования после кикофа не считаются домашним заданием, "
+                "пока организаторы отдельно не добавили их в раздел ДЗ.\n\n"
+                "Если вопрос срочный, лучше уточнить его в общем чате программы или у организаторов.",
+                reply_markup=homework_program_keyboard(),
+            )
+            await state.clear()
+            return
 
         extra_context = (
             "Раздел: помощь с домашним заданием.\n"
             "Используй список домашних заданий ниже как основной контекст. "
+            "Не считай входную диагностику, тестирование, анкету, кикоф или обычное мероприятие домашним заданием, "
+            "если они явно не добавлены в таблицу домашних заданий ниже. "
             "Если выбрано конкретное ДЗ, используй только материалы того же урока, модуля, даты или связанный файл. "
             "Если точного ответа нет в описании ДЗ или загруженных материалах, скажи об этом "
             "и предложи уточнить вопрос у организаторов.\n\n"
@@ -2857,7 +2874,7 @@ def build_main_router(container: AppContainer) -> Router:
             message.text,
             state,
             mode="homework_help",
-            force_rag=True,
+            force_rag=bool(rag_lesson_key or rag_lesson_date or rag_document_ids),
             extra_context=extra_context,
             lesson_key=rag_lesson_key,
             lesson_date=rag_lesson_date,
