@@ -22,6 +22,8 @@ from app.db.repositories import (
 from app.db.session import SessionLocal
 from app.notifications.constants import (
     DAILY_TEST_NOTIFICATION_KEY,
+    NOTIFICATION_ACTIVE_KEY,
+    NOTIFICATION_EXPIRES_AT_KEY,
     NOTIFICATION_ICS_CAPTION,
     NOTIFICATION_ICS_FILENAME_KEY,
     NOTIFICATION_ICS_PATH_KEY,
@@ -65,6 +67,16 @@ class NotificationService:
 
         delivery_date = now.date()
         async with SessionLocal() as session:
+            active_value = await AppSettingRepository.get_value(session, NOTIFICATION_ACTIVE_KEY)
+            if not _is_enabled(active_value):
+                return
+
+            expires_at_value = await AppSettingRepository.get_value(session, NOTIFICATION_EXPIRES_AT_KEY)
+            expires_at = _parse_expires_at(expires_at_value, self.timezone)
+            if expires_at is not None and now >= expires_at:
+                logger.info("Notification expired at %s, skip sending", expires_at.isoformat())
+                return
+
             text = await BotTextRepository.get_value(
                 session,
                 NOTIFICATION_TEXT_KEY,
@@ -132,3 +144,25 @@ class NotificationService:
                         error_text=str(exc),
                         user_id=recipient.user_id,
                     )
+
+
+def _is_enabled(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _parse_expires_at(value: str | None, timezone: ZoneInfo) -> datetime | None:
+    if not value:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        logger.warning("Invalid notification expiry datetime: %s", value)
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone)
+    return parsed.astimezone(timezone)

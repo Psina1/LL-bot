@@ -85,6 +85,8 @@ from app.db.repositories import (
 )
 from app.db.session import SessionLocal
 from app.notifications.constants import (
+    NOTIFICATION_ACTIVE_KEY,
+    NOTIFICATION_EXPIRES_AT_KEY,
     NOTIFICATION_ICS_FILENAME_KEY,
     NOTIFICATION_ICS_PATH_KEY,
     NOTIFICATION_TEXT_KEY,
@@ -148,6 +150,10 @@ def _format_admin_datetime(value: datetime | None) -> str:
     if value.tzinfo is not None:
         value = value.astimezone(timezone.utc)
     return value.strftime("%Y-%m-%d %H:%M")
+
+
+def _setting_enabled(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
 def _shorten_project_context(project_context: str, limit: int = 900) -> str:
@@ -512,6 +518,40 @@ def build_main_router(container: AppContainer) -> Router:
             return date(year, month, day)
 
         raise ValueError("invalid_lesson_date")
+
+    def parse_notification_expiry(text_value: str | None) -> datetime | None:
+        text = (text_value or "").strip()
+        if not text:
+            return None
+        normalized = text.replace("T", " ")
+
+        iso_match = re.search(
+            r"\b(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})\b",
+            normalized,
+        )
+        if iso_match:
+            return datetime(
+                int(iso_match.group(1)),
+                int(iso_match.group(2)),
+                int(iso_match.group(3)),
+                int(iso_match.group(4)),
+                int(iso_match.group(5)),
+            )
+
+        numeric_match = re.search(
+            r"\b(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\s+(\d{1,2}):(\d{2})\b",
+            normalized,
+        )
+        if numeric_match:
+            day = int(numeric_match.group(1))
+            month = int(numeric_match.group(2))
+            year_raw = numeric_match.group(3)
+            year = datetime.now().year if year_raw is None else int(year_raw)
+            if year < 100:
+                year += 2000
+            return datetime(year, month, day, int(numeric_match.group(4)), int(numeric_match.group(5)))
+
+        return None
 
     def format_lesson_date(value: date | None) -> str:
         return value.strftime("%d.%m.%Y") if value else "без даты"
@@ -1140,8 +1180,16 @@ def build_main_router(container: AppContainer) -> Router:
         try:
             async with SessionLocal() as session:
                 ics_filename = await AppSettingRepository.get_value(session, NOTIFICATION_ICS_FILENAME_KEY)
+                notification_active = await AppSettingRepository.get_value(session, NOTIFICATION_ACTIVE_KEY)
+                notification_expires_at = await AppSettingRepository.get_value(session, NOTIFICATION_EXPIRES_AT_KEY)
         except Exception:
             ics_filename = None
+            notification_active = None
+            notification_expires_at = None
+        active_text = "активно" if _setting_enabled(notification_active) else "остановлено"
+        if notification_expires_at:
+            active_text += f", до {notification_expires_at}"
+        lines.append(f"- Рассылка уведомления: {active_text}")
         lines.append(f"- ICS для уведомлений: {ics_filename or 'не загружен'}")
 
         lines.append("")
@@ -1489,6 +1537,10 @@ def build_main_router(container: AppContainer) -> Router:
             "Админ: материалы",
             "Админ: тексты",
             "Админ: статистика",
+            "Админ: аналитика",
+            "Админ: выгрузка CSV",
+            "Админ: уведомления",
+            "Админ: стоп уведомления",
             "Админ: напоминание",
             "Админ: загрузить ICS",
             "Админ: загрузить медиа",
@@ -1506,6 +1558,121 @@ def build_main_router(container: AppContainer) -> Router:
         user = await ensure_user(message)
         await send_reminder_to_group(message, message.text, user.id)
         await state.clear()
+
+    async def build_notification_admin_report() -> str:
+        async with SessionLocal() as session:
+            active_value = await AppSettingRepository.get_value(session, NOTIFICATION_ACTIVE_KEY)
+            expires_at = await AppSettingRepository.get_value(session, NOTIFICATION_EXPIRES_AT_KEY)
+            ics_filename = await AppSettingRepository.get_value(session, NOTIFICATION_ICS_FILENAME_KEY)
+            notification_text = await BotTextRepository.get_value(
+                session,
+                NOTIFICATION_TEXT_KEY,
+                BOT_TEXT_DEFAULTS[NOTIFICATION_TEXT_KEY],
+            )
+            recipients_by_time = {
+                time_value: len(await UserNotificationSettingRepository.list_due_recipients(session, time_value))
+                for time_value in NOTIFICATION_TIME_OPTIONS
+            }
+
+        active = _setting_enabled(active_value)
+        preview = notification_text.strip()
+        if len(preview) > 700:
+            preview = f"{preview[:700].rstrip()}..."
+
+        lines = [
+            "Уведомления:",
+            f"- статус рассылки: {'активна' if active else 'остановлена'}",
+            f"- срок годности: {expires_at or 'не задан'}",
+            f"- ICS-файл: {ics_filename or 'не загружен'}",
+            "",
+            "Получателей по выбранному времени:",
+        ]
+        for time_value, count in recipients_by_time.items():
+            lines.append(f"- {time_value}: {count}")
+        lines.extend(
+            [
+                "",
+                "Текущий текст:",
+                preview or "текст не задан",
+                "",
+                "Команды:",
+                "- /stop_notifications - остановить текущую рассылку",
+                "- /start_notifications 2026-05-22 12:00 - включить рассылку до указанного времени",
+                "- /start_notifications - включить без срока годности",
+                "",
+                "Чтобы не было кринжа после прошедшего события, для разовых уведомлений лучше всегда задавать срок годности.",
+            ]
+        )
+        return "\n".join(lines)
+
+    @router.message(Command("notification_status"))
+    @router.message(F.text == "Админ: уведомления")
+    async def admin_notification_status_handler(message: Message) -> None:
+        if not await require_admin(message):
+            return
+        await message.answer(await build_notification_admin_report(), reply_markup=admin_menu_keyboard(), parse_mode=None)
+
+    @router.message(Command("stop_notifications"))
+    @router.message(F.text == "Админ: стоп уведомления")
+    async def admin_stop_notifications_handler(message: Message) -> None:
+        if not await require_admin(message):
+            return
+        user = await ensure_user(message)
+        async with SessionLocal() as session:
+            await AppSettingRepository.upsert(
+                session,
+                key=NOTIFICATION_ACTIVE_KEY,
+                value="false",
+                updated_by_user_id=user.id,
+            )
+        await message.answer(
+            "Рассылка пользовательских уведомлений остановлена.\n\n"
+            "Текст и ICS-файл не удалял: их можно использовать позже. "
+            "Чтобы снова включить, отправь /start_notifications 2026-05-22 12:00.",
+            reply_markup=admin_menu_keyboard(),
+            parse_mode=None,
+        )
+
+    @router.message(Command("start_notifications"))
+    async def admin_start_notifications_handler(message: Message) -> None:
+        if not await require_admin(message):
+            return
+        expires_argument = command_argument(message.text)
+        expires_at = parse_notification_expiry(expires_argument)
+        if expires_argument and expires_at is None:
+            await message.answer(
+                "Не понял срок годности уведомления.\n\n"
+                "Пример: /start_notifications 2026-05-22 12:00\n"
+                "Или: /start_notifications 22.05 12:00",
+                reply_markup=admin_menu_keyboard(),
+                parse_mode=None,
+            )
+            return
+
+        user = await ensure_user(message)
+        async with SessionLocal() as session:
+            await AppSettingRepository.upsert(
+                session,
+                key=NOTIFICATION_ACTIVE_KEY,
+                value="true",
+                updated_by_user_id=user.id,
+            )
+            await AppSettingRepository.upsert(
+                session,
+                key=NOTIFICATION_EXPIRES_AT_KEY,
+                value=expires_at.isoformat(timespec="minutes") if expires_at else "",
+                updated_by_user_id=user.id,
+            )
+
+        if expires_at is None:
+            tail = "Срок годности не задан, поэтому не забудь потом нажать «Админ: стоп уведомления»."
+        else:
+            tail = f"Бот сам перестанет отправлять это уведомление после {expires_at.strftime('%d.%m.%Y %H:%M')}."
+        await message.answer(
+            f"Рассылка пользовательских уведомлений включена.\n\n{tail}",
+            reply_markup=admin_menu_keyboard(),
+            parse_mode=None,
+        )
 
     @router.message(Command("upload_global_material"))
     @router.message(F.text == "Админ: загрузить материал")
@@ -2306,30 +2473,17 @@ def build_main_router(container: AppContainer) -> Router:
             output_cost_usd = usage["completion_tokens"] / 1_000_000 * settings.openai_chat_output_usd_per_1m
             return (input_cost_usd + output_cost_usd) * settings.usd_rub_rate
 
-        def yandex_chat_cost(usage: dict[str, int]) -> float:
-            input_cost_rub = usage["prompt_tokens"] / 1_000 * settings.yandexgpt_input_rub_per_1k
-            output_cost_rub = usage["completion_tokens"] / 1_000 * settings.yandexgpt_output_rub_per_1k
-            return input_cost_rub + output_cost_rub
-
         openai_embedding_rub = (
             embedding_tokens_total / 1_000_000 * settings.openai_embedding_usd_per_1m * settings.usd_rub_rate
         )
-        yandex_embedding_rub = embedding_tokens_total / 1_000 * settings.yandex_embedding_rub_per_1k
-
-        billing_started_at = _parse_billing_started_at(settings.vm_billing_started_at)
-        vm_spent_line = "- VM потрачено с запуска: нет данных"
-        if billing_started_at is not None:
-            elapsed_hours = max((now - billing_started_at).total_seconds() / 3600, 0)
-            vm_spent_line = f"- VM потрачено с {billing_started_at.date()}: {_format_rub(elapsed_hours * settings.vm_rub_per_hour)}"
 
         lines = [
             "Расходы и оценки:",
             "",
             "Инфраструктура:",
-            f"- VM/сервер: {_format_rub(settings.vm_rub_per_hour)} в час",
-            f"- VM если 24/7: {_format_rub(settings.vm_rub_per_hour * 24)} в день",
-            f"- VM если 24/7: {_format_rub(settings.vm_rub_per_hour * 24 * 30)} в месяц",
-            vm_spent_line,
+            "- бот сейчас работает на Hostinger, не на Yandex VM",
+            "- точную стоимость сервера смотри в Hostinger Billing/hPanel",
+            "- внутри бота считаем только примерные расходы LLM по сохранённым токенам",
             "",
             "LLM токены, сохранённые в БД:",
             (
@@ -2351,16 +2505,10 @@ def build_main_router(container: AppContainer) -> Router:
             f"- 30д: {_format_rub(openai_chat_cost(usage_month))}",
             f"- embeddings за все загруженные чанки: ~{_format_tokens(embedding_tokens_total)} токенов, {_format_rub(openai_embedding_rub)}",
             "",
-            "Оценка YandexGPT Lite в рублях:",
-            f"- 24ч: {_format_rub(yandex_chat_cost(usage_today))}",
-            f"- 7д: {_format_rub(yandex_chat_cost(usage_week))}",
-            f"- 30д: {_format_rub(yandex_chat_cost(usage_month))}",
-            f"- embeddings за все загруженные чанки: ~{_format_tokens(embedding_tokens_total)} токенов, {_format_rub(yandex_embedding_rub)}",
-            "",
             "Важно:",
             "- Это оценка по успешным ответам, сохранённым в БД.",
-            "- Точный счёт за VM смотри в Yandex Billing.",
-            "- Точный счёт OpenAI/YandexGPT смотри в кабинете провайдера.",
+            "- OCR по презентациям тоже тратит OpenAI, но такие расходы сейчас не всегда попадают в таблицу сообщений.",
+            "- Точный счёт OpenAI смотри в кабинете OpenAI.",
         ]
         await message.answer("\n".join(lines), reply_markup=admin_menu_keyboard(), parse_mode=None)
 

@@ -58,6 +58,7 @@ ADMIN_MENU_BUTTONS = [
     [KeyboardButton(text="Админ: загрузить материал"), KeyboardButton(text="Админ: материалы")],
     [KeyboardButton(text="Админ: тексты"), KeyboardButton(text="Админ: статистика")],
     [KeyboardButton(text="Админ: аналитика"), KeyboardButton(text="Админ: выгрузка CSV")],
+    [KeyboardButton(text="Админ: уведомления"), KeyboardButton(text="Админ: стоп уведомления")],
     [KeyboardButton(text="Админ: напоминание"), KeyboardButton(text="Админ: загрузить ICS")],
     [KeyboardButton(text="Админ: загрузить медиа"), KeyboardButton(text="Админ: расходы")],
     [KeyboardButton(text="Главное меню")],
