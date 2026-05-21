@@ -642,6 +642,56 @@ class ProgramLessonRepository:
         )
         return result.scalar_one_or_none()
 
+    @staticmethod
+    async def list_by_start_date(session: AsyncSession, lesson_date, limit: int = 50) -> list[ProgramLesson]:
+        result = await session.execute(
+            select(ProgramLesson)
+            .where(and_(ProgramLesson.is_active.is_(True), ProgramLesson.date_start == lesson_date))
+            .order_by(ProgramLesson.sort_order.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_next_after(
+        session: AsyncSession,
+        lesson_key: str | None = None,
+        lesson_date=None,
+    ) -> ProgramLesson | None:
+        if lesson_key:
+            current = await ProgramLessonRepository.get_by_key(session, lesson_key)
+            if current is not None:
+                result = await session.execute(
+                    select(ProgramLesson)
+                    .where(
+                        and_(
+                            ProgramLesson.is_active.is_(True),
+                            ProgramLesson.date_start.is_not(None),
+                            ProgramLesson.sort_order > current.sort_order,
+                        )
+                    )
+                    .order_by(ProgramLesson.sort_order.asc())
+                    .limit(1)
+                )
+                return result.scalar_one_or_none()
+
+        if lesson_date:
+            result = await session.execute(
+                select(ProgramLesson)
+                .where(
+                    and_(
+                        ProgramLesson.is_active.is_(True),
+                        ProgramLesson.date_start.is_not(None),
+                        ProgramLesson.date_start > lesson_date,
+                    )
+                )
+                .order_by(ProgramLesson.date_start.asc(), ProgramLesson.sort_order.asc())
+                .limit(1)
+            )
+            return result.scalar_one_or_none()
+
+        return None
+
 
 class DocumentRepository:
     @staticmethod
@@ -1031,6 +1081,7 @@ class HomeworkRepository:
         module_title: str | None = None,
         lesson_key: str | None = None,
         lesson_date=None,
+        deadline_date=None,
         created_by_user_id: int | None = None,
         status: str = "active",
     ) -> Homework:
@@ -1043,6 +1094,7 @@ class HomeworkRepository:
             module_title=module_title,
             lesson_key=lesson_key,
             lesson_date=lesson_date,
+            deadline_date=deadline_date,
             created_by_user_id=created_by_user_id,
             status=status,
         )
@@ -1061,7 +1113,12 @@ class HomeworkRepository:
         stmt = (
             select(Homework)
             .where(Homework.status == "active")
-            .order_by(Homework.module_number.asc().nulls_last(), Homework.lesson_date.asc().nulls_last(), Homework.id.asc())
+            .order_by(
+                Homework.deadline_date.asc().nulls_last(),
+                Homework.lesson_date.asc().nulls_last(),
+                Homework.module_number.asc().nulls_last(),
+                Homework.id.asc(),
+            )
             .limit(limit)
         )
         result = await session.execute(stmt)
@@ -1086,7 +1143,23 @@ class HomeworkRepository:
         stmt = (
             select(Homework)
             .where(and_(Homework.status == "active", lesson_filter))
-            .order_by(Homework.module_number.asc().nulls_last(), Homework.lesson_date.asc().nulls_last(), Homework.id.asc())
+            .order_by(
+                Homework.deadline_date.asc().nulls_last(),
+                Homework.lesson_date.asc().nulls_last(),
+                Homework.module_number.asc().nulls_last(),
+                Homework.id.asc(),
+            )
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def list_by_deadline(session: AsyncSession, deadline_date, limit: int = 50) -> list[Homework]:
+        stmt = (
+            select(Homework)
+            .where(and_(Homework.status == "active", Homework.deadline_date == deadline_date))
+            .order_by(Homework.lesson_date.asc().nulls_last(), Homework.module_number.asc().nulls_last(), Homework.id.asc())
             .limit(limit)
         )
         result = await session.execute(stmt)

@@ -108,6 +108,12 @@ ADMIN_HOMEWORK_LINK_BUTTONS = [
     [KeyboardButton(text="Админ: меню")],
 ]
 
+ADMIN_HOMEWORK_DEADLINE_BUTTONS = [
+    [KeyboardButton(text="Дедлайн: следующее занятие")],
+    [KeyboardButton(text="Дедлайн: без даты")],
+    [KeyboardButton(text="Админ: меню")],
+]
+
 ADMIN_MEDIA_TYPE_BUTTONS = [
     [KeyboardButton(text="Медиа: видео"), KeyboardButton(text="Медиа: подкаст")],
     [KeyboardButton(text="Медиа: картинка")],
@@ -183,6 +189,7 @@ def all_reply_button_labels() -> set[str]:
         ADMIN_MATERIAL_TYPE_BUTTONS,
         ADMIN_LESSON_DATE_BUTTONS,
         ADMIN_HOMEWORK_LINK_BUTTONS,
+        ADMIN_HOMEWORK_DEADLINE_BUTTONS,
         ADMIN_MEDIA_TYPE_BUTTONS,
         ADMIN_MEDIA_MODULE_BUTTONS,
     ]
@@ -216,6 +223,10 @@ def admin_lesson_date_keyboard() -> ReplyKeyboardMarkup:
 
 def admin_homework_link_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=ADMIN_HOMEWORK_LINK_BUTTONS, resize_keyboard=True)
+
+
+def admin_homework_deadline_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=ADMIN_HOMEWORK_DEADLINE_BUTTONS, resize_keyboard=True)
 
 
 def admin_media_type_keyboard() -> ReplyKeyboardMarkup:

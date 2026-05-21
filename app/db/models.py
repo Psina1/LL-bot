@@ -305,6 +305,7 @@ class Homework(Base):
     module_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     lesson_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
     lesson_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    deadline_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="active", server_default="active")
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -315,6 +316,7 @@ class Homework(Base):
     __table_args__ = (
         Index("ix_homeworks_lesson_key", "lesson_key"),
         Index("ix_homeworks_lesson_date", "lesson_date"),
+        Index("ix_homeworks_deadline_date", "deadline_date"),
         Index("ix_homeworks_status", "status"),
         Index("ix_homeworks_document_id", "document_id"),
     )

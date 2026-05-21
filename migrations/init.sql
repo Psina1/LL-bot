@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS homeworks (
     module_title VARCHAR(255),
     lesson_key VARCHAR(100),
     lesson_date DATE,
+    deadline_date DATE,
     status VARCHAR(50) NOT NULL DEFAULT 'active',
     created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -168,6 +169,7 @@ CREATE INDEX IF NOT EXISTS ix_user_files_user_id ON user_files(user_id);
 CREATE INDEX IF NOT EXISTS ix_user_files_document_id ON user_files(document_id);
 CREATE INDEX IF NOT EXISTS ix_homeworks_lesson_key ON homeworks(lesson_key);
 CREATE INDEX IF NOT EXISTS ix_homeworks_lesson_date ON homeworks(lesson_date);
+CREATE INDEX IF NOT EXISTS ix_homeworks_deadline_date ON homeworks(deadline_date);
 CREATE INDEX IF NOT EXISTS ix_homeworks_status ON homeworks(status);
 CREATE INDEX IF NOT EXISTS ix_homeworks_document_id ON homeworks(document_id);
 CREATE INDEX IF NOT EXISTS ix_program_media_type_created_at ON program_media(media_type, created_at);

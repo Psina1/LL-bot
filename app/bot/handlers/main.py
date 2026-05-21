@@ -22,6 +22,7 @@ from app.bot.keyboards.reply import (
     admin_material_module_keyboard,
     admin_material_season_keyboard,
     admin_material_type_keyboard,
+    admin_homework_deadline_keyboard,
     admin_homework_link_keyboard,
     admin_lesson_date_keyboard,
     admin_media_module_keyboard,
@@ -574,6 +575,9 @@ def build_main_router(container: AppContainer) -> Router:
             parts.append(format_lesson_date(homework.lesson_date))
         return ", ".join(parts) or "без привязки"
 
+    def homework_deadline_label(homework) -> str:
+        return format_lesson_date(homework.deadline_date) if getattr(homework, "deadline_date", None) else "не указан"
+
     def extract_material_lookup(text_value: str | None) -> dict[str, Any] | None:
         text = (text_value or "").strip().lower()
         if not text:
@@ -1090,7 +1094,8 @@ def build_main_router(container: AppContainer) -> Router:
 
         lines = ["Список домашних заданий:", ""]
         for homework in homeworks[:20]:
-            lines.append(f"- {homework.title} ({homework_lesson_label(homework)})")
+            deadline_text = f"; срок сдачи: {homework_deadline_label(homework)}" if homework.deadline_date else ""
+            lines.append(f"- {homework.title} ({homework_lesson_label(homework)}{deadline_text})")
         lines.extend(["", "Выбери задание кнопкой ниже или задай свой вопрос по домашке."])
         await message.answer("\n".join(lines), reply_markup=homework_list_keyboard(homeworks))
 
@@ -1107,6 +1112,8 @@ def build_main_router(container: AppContainer) -> Router:
             f"Домашнее задание: {escape(homework.title)}",
             f"Привязка: {escape(homework_lesson_label(homework))}",
         ]
+        if homework.deadline_date:
+            lines.append(f"Срок сдачи: {escape(homework_deadline_label(homework))}")
         if homework.description:
             lines.extend(["", escape(homework.description)])
         if homework.moodle_url:
@@ -1573,6 +1580,9 @@ def build_main_router(container: AppContainer) -> Router:
                 time_value: len(await UserNotificationSettingRepository.list_due_recipients(session, time_value))
                 for time_value in NOTIFICATION_TIME_OPTIONS
             }
+            tomorrow = datetime.now().date() + timedelta(days=1)
+            due_lessons = await ProgramLessonRepository.list_by_start_date(session, tomorrow)
+            due_homeworks = await HomeworkRepository.list_by_deadline(session, tomorrow)
 
         active = _setting_enabled(active_value)
         preview = notification_text.strip()
@@ -1584,6 +1594,12 @@ def build_main_router(container: AppContainer) -> Router:
             f"- статус рассылки: {'активна' if active else 'остановлена'}",
             f"- срок годности: {expires_at or 'не задан'}",
             f"- ICS-файл: {ics_filename or 'не загружен'}",
+            "",
+            "Автоматические уведомления теперь одноразовые:",
+            "- события: за 1 день до даты занятия",
+            "- домашки: за 1 день до дедлайна сдачи",
+            "- время: то, которое выбрал пользователь",
+            f"- к отправке завтра: событий={len(due_lessons)}, домашек={len(due_homeworks)}",
             "",
             "Получателей по выбранному времени:",
         ]
@@ -1600,7 +1616,7 @@ def build_main_router(container: AppContainer) -> Router:
                 "- /start_notifications 2026-05-22 12:00 - включить рассылку до указанного времени",
                 "- /start_notifications - включить без срока годности",
                 "",
-                "Чтобы не было кринжа после прошедшего события, для разовых уведомлений лучше всегда задавать срок годности.",
+                "Старый текст уведомления не отправляется ежедневно. Он оставлен только как черновик для ручных/тестовых рассылок.",
             ]
         )
         return "\n".join(lines)
@@ -1842,7 +1858,7 @@ def build_main_router(container: AppContainer) -> Router:
         if material_type == "homework":
             await state.set_state(AdminFlow.waiting_for_homework_link)
             await message.answer(
-                "Шаг 5 из 6: пришли ссылку на Moodle/ПРОГРЕСС для сдачи домашнего задания.\n\n"
+                "Шаг 5 из 7: пришли ссылку на Moodle/ПРОГРЕСС для сдачи домашнего задания.\n\n"
                 "Если ссылки пока нет, нажми «Ссылка: без ссылки».",
                 reply_markup=admin_homework_link_keyboard(),
                 parse_mode=None,
@@ -1886,20 +1902,93 @@ def build_main_router(container: AppContainer) -> Router:
 
         await state.update_data(homework_moodle_url=moodle_url)
         data = await state.get_data()
+        lesson_key = data.get("material_lesson_key")
+        lesson_date_raw = data.get("material_lesson_date")
+        lesson_date = date.fromisoformat(lesson_date_raw) if lesson_date_raw else None
+        link_text = moodle_url or "без ссылки"
+
+        async with SessionLocal() as session:
+            next_lesson = await ProgramLessonRepository.get_next_after(
+                session=session,
+                lesson_key=lesson_key,
+                lesson_date=lesson_date,
+            )
+
+        default_deadline = next_lesson.date_start if next_lesson and next_lesson.date_start else None
+        await state.update_data(homework_default_deadline=default_deadline.isoformat() if default_deadline else None)
+
+        next_lesson_text = (
+            f"{format_lesson_date(default_deadline)} ({next_lesson.lesson_title})"
+            if default_deadline and next_lesson
+            else "следующее занятие не найдено"
+        )
+        await state.set_state(AdminFlow.waiting_for_homework_deadline)
+        await message.answer(
+            "Шаг 6 из 7: укажи дедлайн сдачи ДЗ.\n\n"
+            "Технически дедлайн обычно равен дате следующего занятия.\n"
+            f"Нашёл следующее занятие: {next_lesson_text}.\n\n"
+            "Можно написать дату вручную в формате `30.05.2026`, нажать «Дедлайн: следующее занятие» "
+            "или «Дедлайн: без даты».\n\n"
+            f"Ссылка для сдачи: {link_text}",
+            reply_markup=admin_homework_deadline_keyboard(),
+            parse_mode=None,
+        )
+
+    @router.message(AdminFlow.waiting_for_homework_deadline, F.text)
+    async def admin_homework_deadline_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        if message.text == "Админ: меню":
+            await state.clear()
+            await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
+            return
+
+        data = await state.get_data()
+        default_deadline_raw = data.get("homework_default_deadline")
+        default_deadline = date.fromisoformat(default_deadline_raw) if default_deadline_raw else None
+
+        if message.text == "Дедлайн: следующее занятие":
+            if default_deadline is None:
+                await message.answer(
+                    "Не нашёл следующее занятие для этой привязки. Напиши дату вручную или нажми «Дедлайн: без даты».",
+                    reply_markup=admin_homework_deadline_keyboard(),
+                    parse_mode=None,
+                )
+                return
+            deadline_date = default_deadline
+        elif message.text == "Дедлайн: без даты":
+            deadline_date = None
+        else:
+            try:
+                deadline_date = parse_lesson_date_input(message.text)
+            except ValueError:
+                await message.answer(
+                    "Не распознал дату дедлайна. Напиши в формате `30.05.2026`, нажми «Дедлайн: следующее занятие» "
+                    "или «Дедлайн: без даты».",
+                    reply_markup=admin_homework_deadline_keyboard(),
+                    parse_mode=None,
+                )
+                return
+
+        await state.update_data(homework_deadline_date=deadline_date.isoformat() if deadline_date else None)
+        data = await state.get_data()
         season_title = data.get("material_season_title") or "без сезона"
         module_number = data.get("material_module_number")
         module_title = data.get("material_module_title")
         lesson_date_raw = data.get("material_lesson_date")
         lesson_date = date.fromisoformat(lesson_date_raw) if lesson_date_raw else None
         module_text = module_title or (f"урок/модуль {module_number}" if module_number else "общий материал")
-        link_text = moodle_url or "без ссылки"
+        link_text = data.get("homework_moodle_url") or "без ссылки"
+
         await state.set_state(AdminFlow.waiting_for_global_file)
         await message.answer(
-            "Шаг 6 из 6: пришли файл PDF/DOCX/PPTX/TXT с домашним заданием.\n\n"
+            "Шаг 7 из 7: пришли файл PDF/DOCX/PPTX/TXT с домашним заданием.\n\n"
             f"Будет сохранено так:\n"
             f"- сезон: {season_title}\n"
             f"- привязка: {module_text}\n"
-            f"- дата: {format_lesson_date(lesson_date)}\n"
+            f"- дата занятия: {format_lesson_date(lesson_date)}\n"
+            f"- дедлайн сдачи: {format_lesson_date(deadline_date)}\n"
             f"- тип: домашнее задание\n"
             f"- ссылка: {link_text}",
             reply_markup=admin_menu_keyboard(),
@@ -2220,7 +2309,7 @@ def build_main_router(container: AppContainer) -> Router:
             for homework in homeworks[:20]:
                 lines.append(
                     f"- homework id={homework.id} | {homework.title} | {homework_lesson_label(homework)} | "
-                    f"document_id={homework.document_id or 'none'}"
+                    f"deadline={homework_deadline_label(homework)} | document_id={homework.document_id or 'none'}"
                 )
         await message.answer("\n".join(lines))
 
@@ -3181,6 +3270,8 @@ def build_main_router(container: AppContainer) -> Router:
                     f"название: {homework.title}",
                     f"привязка: {homework_lesson_label(homework)}",
                 ]
+                if homework.deadline_date:
+                    block_lines.append(f"срок сдачи: {homework_deadline_label(homework)}")
                 if homework.description:
                     block_lines.append(f"описание: {homework.description}")
                 if homework.moodle_url:
@@ -3313,6 +3404,8 @@ def build_main_router(container: AppContainer) -> Router:
             if material_type is None and "material_type" not in state_data and "домаш" in (document.file_name or "").lower():
                 material_type = "homework"
             moodle_url = state_data.get("homework_moodle_url")
+            deadline_date_raw = state_data.get("homework_deadline_date")
+            deadline_date = date.fromisoformat(deadline_date_raw) if deadline_date_raw else None
             tags = build_content_tags(
                 lesson_key=lesson_key,
                 module_number=module_number,
@@ -3355,6 +3448,7 @@ def build_main_router(container: AppContainer) -> Router:
                     module_title=module_title,
                     lesson_key=lesson_key,
                     lesson_date=lesson_date,
+                    deadline_date=deadline_date,
                     created_by_user_id=user.id,
                 )
             module_text = f"урок/модуль {module_number}" if module_number else "общий материал"
@@ -3364,6 +3458,7 @@ def build_main_router(container: AppContainer) -> Router:
             if homework is not None:
                 homework_line = f"- домашнее задание id: {homework.id}\n"
                 link_line = f"- ссылка: {moodle_url or 'без ссылки'}\n"
+                link_line += f"- дедлайн сдачи: {format_lesson_date(deadline_date)}\n"
             await message.answer(
                 "Материал загружен и обработан.\n\n"
                 f"- id: {indexed_document.id}\n"
