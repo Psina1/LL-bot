@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
+    AllowedUser,
     AppSetting,
     BotText,
     Chunk,
@@ -254,6 +255,85 @@ class NotificationDeliveryRepository:
         )
         await session.execute(stmt)
         await session.commit()
+
+
+def normalize_telegram_username(username: str | None) -> str | None:
+    if not username:
+        return None
+    normalized = username.strip().lstrip("@").lower()
+    return normalized or None
+
+
+class AllowedUserRepository:
+    @staticmethod
+    async def is_allowed(
+        session: AsyncSession,
+        telegram_id: int,
+        username: str | None,
+        admin_ids: set[int],
+    ) -> bool:
+        if telegram_id in admin_ids:
+            return True
+
+        username_normalized = normalize_telegram_username(username)
+        filters = [AllowedUser.telegram_id == telegram_id]
+        if username_normalized:
+            filters.append(AllowedUser.username_normalized == username_normalized)
+
+        result = await session.execute(
+            select(AllowedUser.id).where(and_(AllowedUser.is_active.is_(True), or_(*filters))).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    @staticmethod
+    async def upsert(
+        session: AsyncSession,
+        full_name: str | None,
+        telegram_id: int | None = None,
+        username: str | None = None,
+        phone: str | None = None,
+        note: str | None = None,
+        is_active: bool = True,
+    ) -> AllowedUser:
+        username_normalized = normalize_telegram_username(username)
+        values = {
+            "telegram_id": telegram_id,
+            "username": username.strip() if username else None,
+            "username_normalized": username_normalized,
+            "full_name": full_name.strip() if full_name else None,
+            "phone": phone.strip() if phone else None,
+            "note": note.strip() if note else None,
+            "is_active": is_active,
+        }
+
+        lookup_filter = None
+        if telegram_id is not None:
+            lookup_filter = AllowedUser.telegram_id == telegram_id
+        elif username_normalized:
+            lookup_filter = AllowedUser.username_normalized == username_normalized
+
+        allowed_user = None
+        if lookup_filter is not None:
+            result = await session.execute(select(AllowedUser).where(lookup_filter))
+            allowed_user = result.scalar_one_or_none()
+
+        if allowed_user is None:
+            allowed_user = AllowedUser(**values)
+            session.add(allowed_user)
+        else:
+            for key, value in values.items():
+                setattr(allowed_user, key, value)
+
+        await session.commit()
+        await session.refresh(allowed_user)
+        return allowed_user
+
+    @staticmethod
+    async def count_active(session: AsyncSession) -> int:
+        result = await session.execute(
+            select(func.count(AllowedUser.id)).where(AllowedUser.is_active.is_(True))
+        )
+        return int(result.scalar() or 0)
 
 
 class BotTextRepository:

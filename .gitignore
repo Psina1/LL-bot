@@ -22,6 +22,8 @@ data/tmp/*
 /*.pdf
 /*.docx
 /*.pptx
+/*.xls
+/*.xlsx
 logs/
 *.log
 *.db

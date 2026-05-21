@@ -73,6 +73,29 @@ class User(Base):
     user_files: Mapped[list["UserFile"]] = relationship(back_populates="user")
 
 
+class AllowedUser(Base):
+    __tablename__ = "allowed_users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_id: Mapped[int | None] = mapped_column(BigInteger, unique=True, nullable=True)
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    username_normalized: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    full_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_allowed_users_telegram_id", "telegram_id"),
+        Index("ix_allowed_users_username_normalized", "username_normalized"),
+        Index("ix_allowed_users_is_active", "is_active"),
+    )
+
+
 class Document(Base):
     __tablename__ = "documents"
 
