@@ -120,7 +120,7 @@ class LLMClient:
             ],
         )
         answer = response.choices[0].message.content or ""
-        return answer.strip()
+        return "" if self._is_empty_ocr_response(answer) else answer.strip()
 
     def _mock_chat_completion(self, user_prompt: str) -> ChatResult:
         question = self._extract_question(user_prompt)
@@ -137,6 +137,22 @@ class LLMClient:
         seed = int.from_bytes(digest[:8], byteorder="big", signed=False)
         generator = random.Random(seed)
         return [generator.uniform(-1.0, 1.0) for _ in range(self.settings.embedding_dimensions)]
+
+    @staticmethod
+    def _is_empty_ocr_response(text: str) -> bool:
+        normalized = " ".join(text.strip().lower().strip(".!").split())
+        if not normalized:
+            return True
+        empty_markers = (
+            "текст на изображении отсутствует",
+            "читаемый текст отсутствует",
+            "нет читаемого текста",
+            "текста нет",
+            "на изображении нет текста",
+            "no readable text",
+            "no text found",
+        )
+        return any(marker in normalized for marker in empty_markers)
 
     @staticmethod
     def _extract_question(user_prompt: str) -> str:
