@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -187,6 +188,43 @@ def _format_date(value) -> str:
     return value.strftime("%d.%m.%Y") if value else "дата уточняется"
 
 
+def _homework_lesson_label(homework) -> str:
+    module_title = (getattr(homework, "module_title", None) or "").strip()
+    if module_title:
+        if ":" in module_title:
+            block_title, lesson_title = (part.strip() for part in module_title.split(":", 1))
+            lesson_title = re.sub(
+                r"^занятие\s+(\d+)\s*[.:]\s*",
+                r"занятие \1: ",
+                lesson_title,
+                flags=re.IGNORECASE,
+            ).strip()
+            if block_title and lesson_title:
+                return f"Блок «{block_title}», {lesson_title}"
+        return f"Блок «{module_title}»"
+
+    ordinal_by_number = {
+        1: "первого",
+        2: "второго",
+        3: "третьего",
+        4: "четвёртого",
+        5: "пятого",
+        6: "шестого",
+        7: "седьмого",
+        8: "восьмого",
+        9: "девятого",
+        10: "десятого",
+    }
+    if getattr(homework, "module_number", None):
+        ordinal = ordinal_by_number.get(homework.module_number)
+        if ordinal:
+            return f"ДЗ после {ordinal} занятия"
+        return f"ДЗ после занятия {homework.module_number}"
+    if getattr(homework, "lesson_date", None):
+        return f"ДЗ после занятия {_format_date(homework.lesson_date)}"
+    return "ДЗ"
+
+
 def _build_event_notification_text(lesson) -> str:
     lines = [
         "Напоминание о занятии",
@@ -213,14 +251,9 @@ def _build_homework_notification_text(homework) -> str:
         "",
         f"Завтра, {_format_date(homework.deadline_date)}, дедлайн сдачи:",
         homework.title,
+        "",
+        _homework_lesson_label(homework),
     ]
-    if homework.module_title or homework.lesson_date:
-        context_parts = []
-        if homework.module_title:
-            context_parts.append(homework.module_title)
-        if homework.lesson_date:
-            context_parts.append(_format_date(homework.lesson_date))
-        lines.extend(["", f"Привязка: {', '.join(context_parts)}"])
     if homework.moodle_url:
         lines.extend(["", f"Ссылка для сдачи: {homework.moodle_url}"])
     return "\n".join(lines)

@@ -157,7 +157,7 @@ class RAGService:
         context_blocks: list[str] = []
         sources: list[dict[str, Any]] = []
         for index, match in enumerate(selected_chunks, start=1):
-            block = f"[Фрагмент {index} | score={match.score:.3f}]\n{match.chunk_text}"
+            block = f"{self._context_header(index, match, extra=f'score={match.score:.3f}')}\n{match.chunk_text}"
             context_blocks.append(block)
             sources.append(self._source_from_match(match))
 
@@ -195,7 +195,10 @@ class RAGService:
         context_blocks: list[str] = []
         sources: list[dict[str, Any]] = []
         for index, match in enumerate(selected_chunks, start=1):
-            block = f"[Фрагмент {index} | lesson-scope | score={match.score:.3f}]\n{match.chunk_text}"
+            block = (
+                f"{self._context_header(index, match, extra=f'lesson-scope | score={match.score:.3f}')}\n"
+                f"{match.chunk_text}"
+            )
             context_blocks.append(block)
             sources.append(self._source_from_match(match))
 
@@ -232,7 +235,10 @@ class RAGService:
         context_blocks: list[str] = []
         sources: list[dict[str, Any]] = []
         for index, match in enumerate(selected_chunks, start=1):
-            block = f"[Фрагмент {index} | document_id={document_id} | score={match.score:.3f}]\n{match.chunk_text}"
+            block = (
+                f"{self._context_header(index, match, extra=f'document_id={document_id} | score={match.score:.3f}')}\n"
+                f"{match.chunk_text}"
+            )
             context_blocks.append(block)
             sources.append(self._source_from_match(match))
 
@@ -259,7 +265,7 @@ class RAGService:
         for index, match in enumerate(matches, start=1):
             if total_chars + len(match.chunk_text) > self.settings.max_context_chars:
                 break
-            context_blocks.append(f"[Фрагмент {index} | latest-user-file]\n{match.chunk_text}")
+            context_blocks.append(f"{self._context_header(index, match, extra='latest-user-file')}\n{match.chunk_text}")
             sources.append(self._source_from_match(match))
             total_chars += len(match.chunk_text)
 
@@ -268,6 +274,16 @@ class RAGService:
             context_text="\n\n".join(context_blocks),
             sources=sources,
         )
+
+    @staticmethod
+    def _context_header(index: int, match: ChunkMatch, extra: str | None = None) -> str:
+        metadata = match.metadata or {}
+        material_type = metadata.get("material_type") or "unknown"
+        document_title = metadata.get("document_title") or match.document_title or "unknown"
+        parts = [f"Фрагмент {index}", f"type={material_type}", f"document={document_title}"]
+        if extra:
+            parts.append(extra)
+        return "[" + " | ".join(parts) + "]"
 
     @staticmethod
     def _source_from_match(match: ChunkMatch) -> dict[str, Any]:

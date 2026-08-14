@@ -10,6 +10,10 @@ class UserFlow(StatesGroup):
     waiting_for_followup = State()
     waiting_for_project_help_question = State()
     waiting_for_homework_help_question = State()
+    waiting_for_bot_feedback_score = State()
+    waiting_for_bot_feedback_useful = State()
+    waiting_for_bot_feedback_improve = State()
+    waiting_for_bot_feedback_missing = State()
 
 
 class AdminFlow(StatesGroup):
@@ -31,4 +35,9 @@ class AdminFlow(StatesGroup):
     waiting_for_bot_text = State()
     waiting_for_bot_text_confirm = State()
     waiting_for_reminder_text = State()
+    waiting_for_reminder_confirm = State()
     waiting_for_notification_ics = State()
+    waiting_for_feedback_question_1 = State()
+    waiting_for_feedback_question_2 = State()
+    waiting_for_feedback_question_3 = State()
+    waiting_for_feedback_question_4 = State()

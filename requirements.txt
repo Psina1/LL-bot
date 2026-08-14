@@ -12,3 +12,4 @@ python-pptx==1.0.2
 tiktoken==0.8.0
 aiofiles==24.1.0
 orjson==3.10.11
+openpyxl==3.1.5

@@ -1,5 +1,6 @@
 from aiogram import Router
 
+from app.bot.handlers.lesson_feedback import build_lesson_feedback_router
 from app.bot.handlers.main import build_main_router
 from app.bot.middlewares.access_control import AccessControlMiddleware
 from app.bot.middlewares.analytics import AnalyticsMiddleware
@@ -14,5 +15,6 @@ def build_router(container: AppContainer) -> Router:
     router.message.middleware(analytics)
     router.callback_query.middleware(access_control)
     router.callback_query.middleware(analytics)
+    router.include_router(build_lesson_feedback_router(container))
     router.include_router(build_main_router(container))
     return router

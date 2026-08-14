@@ -78,6 +78,32 @@ CREATE TABLE IF NOT EXISTS user_notification_settings (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS director_assignments (
+    id SERIAL PRIMARY KEY,
+    director_telegram_id BIGINT NOT NULL,
+    employee_telegram_id BIGINT NOT NULL,
+    note TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_director_assignment_pair UNIQUE (director_telegram_id, employee_telegram_id)
+);
+
+CREATE TABLE IF NOT EXISTS director_reminder_logs (
+    id SERIAL PRIMARY KEY,
+    director_telegram_id BIGINT NOT NULL,
+    employee_telegram_id BIGINT,
+    employee_name VARCHAR(512) NOT NULL,
+    template_key VARCHAR(100) NOT NULL DEFAULT 'director_attention_reminder',
+    reminder_text TEXT NOT NULL,
+    reminder_hash VARCHAR(64) NOT NULL,
+    delivery_mode VARCHAR(50) NOT NULL DEFAULT 'admin_test',
+    status VARCHAR(50) NOT NULL DEFAULT 'sent',
+    sent_recipient_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    failed_recipient_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS notification_deliveries (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -164,6 +190,12 @@ CREATE INDEX IF NOT EXISTS ix_documents_lesson_date ON documents(lesson_date);
 CREATE INDEX IF NOT EXISTS ix_chunks_document_id ON chunks(document_id);
 CREATE INDEX IF NOT EXISTS ix_messages_user_created_at ON messages(user_id, created_at);
 CREATE INDEX IF NOT EXISTS ix_user_notification_settings_user_id ON user_notification_settings(user_id);
+CREATE INDEX IF NOT EXISTS ix_director_assignments_director ON director_assignments(director_telegram_id);
+CREATE INDEX IF NOT EXISTS ix_director_assignments_employee ON director_assignments(employee_telegram_id);
+CREATE INDEX IF NOT EXISTS ix_director_assignments_active_director ON director_assignments(is_active, director_telegram_id);
+CREATE INDEX IF NOT EXISTS ix_director_reminder_logs_director_created ON director_reminder_logs(director_telegram_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_director_reminder_logs_employee_created ON director_reminder_logs(director_telegram_id, employee_name, created_at);
+CREATE INDEX IF NOT EXISTS ix_director_reminder_logs_hash_created ON director_reminder_logs(director_telegram_id, employee_name, reminder_hash, created_at);
 CREATE INDEX IF NOT EXISTS ix_notification_deliveries_user_id ON notification_deliveries(user_id);
 CREATE INDEX IF NOT EXISTS ix_user_files_user_id ON user_files(user_id);
 CREATE INDEX IF NOT EXISTS ix_user_files_document_id ON user_files(document_id);

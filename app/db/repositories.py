@@ -11,8 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import (
     AllowedUser,
     AppSetting,
+    BotFeedbackResponse,
     BotText,
     Chunk,
+    DirectorAssignment,
     Document,
     DocumentStatusEnum,
     ErrorLog,
@@ -99,6 +101,37 @@ class UserRepository:
         await session.commit()
 
 
+class DirectorAssignmentRepository:
+    @staticmethod
+    async def has_active_team(session: AsyncSession, director_telegram_id: int) -> bool:
+        stmt = (
+            select(func.count(DirectorAssignment.id))
+            .where(
+                and_(
+                    DirectorAssignment.director_telegram_id == director_telegram_id,
+                    DirectorAssignment.is_active.is_(True),
+                )
+            )
+        )
+        result = await session.execute(stmt)
+        return int(result.scalar() or 0) > 0
+
+    @staticmethod
+    async def list_employee_telegram_ids(session: AsyncSession, director_telegram_id: int) -> list[int]:
+        stmt = (
+            select(DirectorAssignment.employee_telegram_id)
+            .where(
+                and_(
+                    DirectorAssignment.director_telegram_id == director_telegram_id,
+                    DirectorAssignment.is_active.is_(True),
+                )
+            )
+            .order_by(DirectorAssignment.employee_telegram_id.asc())
+        )
+        result = await session.execute(stmt)
+        return [int(value) for value in result.scalars().all()]
+
+
 class MessageRepository:
     @staticmethod
     async def create(
@@ -159,6 +192,78 @@ class MessageFeedbackRepository:
         )
         result = await session.execute(stmt)
         return {str(reason): int(count or 0) for reason, count in result.all()}
+
+
+class BotFeedbackRepository:
+    @staticmethod
+    async def create(
+        session: AsyncSession,
+        user_id: int,
+        telegram_id: int,
+        username: str | None,
+        full_name: str | None,
+        source: str = "deep_link",
+    ) -> BotFeedbackResponse:
+        response = BotFeedbackResponse(
+            user_id=user_id,
+            telegram_id=telegram_id,
+            username=username,
+            full_name=full_name,
+            source=source,
+            status="in_progress",
+        )
+        session.add(response)
+        await session.commit()
+        await session.refresh(response)
+        return response
+
+    @staticmethod
+    async def get_for_user(
+        session: AsyncSession,
+        response_id: int,
+        user_id: int,
+    ) -> BotFeedbackResponse | None:
+        result = await session.execute(
+            select(BotFeedbackResponse).where(
+                and_(
+                    BotFeedbackResponse.id == response_id,
+                    BotFeedbackResponse.user_id == user_id,
+                )
+            )
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def set_score(session: AsyncSession, response_id: int, user_id: int, score: int) -> BotFeedbackResponse | None:
+        response = await BotFeedbackRepository.get_for_user(session, response_id, user_id)
+        if response is None:
+            return None
+        response.usefulness_score = score
+        await session.commit()
+        await session.refresh(response)
+        return response
+
+    @staticmethod
+    async def set_answer(
+        session: AsyncSession,
+        response_id: int,
+        user_id: int,
+        field_name: str,
+        value: str,
+        complete: bool = False,
+    ) -> BotFeedbackResponse | None:
+        response = await BotFeedbackRepository.get_for_user(session, response_id, user_id)
+        if response is None:
+            return None
+        if field_name not in {"useful_text", "improvement_text", "missing_feature_text"}:
+            raise ValueError(f"Unsupported bot feedback field: {field_name}")
+        setattr(response, field_name, value)
+        if complete:
+            response.status = "completed"
+            response.completed_at = datetime.now(timezone.utc)
+        await session.commit()
+        await session.refresh(response)
+        return response
 
 
 @dataclass(slots=True)
@@ -653,6 +758,64 @@ class ProgramLessonRepository:
         return list(result.scalars().all())
 
     @staticmethod
+    async def latest_started(session: AsyncSession, today) -> ProgramLesson | None:
+        result = await session.execute(
+            select(ProgramLesson)
+            .where(
+                and_(
+                    ProgramLesson.is_active.is_(True),
+                    ProgramLesson.date_start.is_not(None),
+                    ProgramLesson.date_start <= today,
+                )
+            )
+            .order_by(ProgramLesson.date_start.desc(), ProgramLesson.sort_order.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def latest_started_with_content(session: AsyncSession, today) -> ProgramLesson | None:
+        document_exists = (
+            select(Document.id)
+            .where(
+                and_(
+                    Document.lesson_key == ProgramLesson.lesson_key,
+                    Document.status == DocumentStatusEnum.ready,
+                )
+            )
+            .exists()
+        )
+        media_exists = (
+            select(ProgramMedia.id)
+            .where(ProgramMedia.lesson_key == ProgramLesson.lesson_key)
+            .exists()
+        )
+        homework_exists = (
+            select(Homework.id)
+            .where(
+                and_(
+                    Homework.lesson_key == ProgramLesson.lesson_key,
+                    Homework.status == "active",
+                )
+            )
+            .exists()
+        )
+        result = await session.execute(
+            select(ProgramLesson)
+            .where(
+                and_(
+                    ProgramLesson.is_active.is_(True),
+                    ProgramLesson.date_start.is_not(None),
+                    ProgramLesson.date_start <= today,
+                    or_(document_exists, media_exists, homework_exists),
+                )
+            )
+            .order_by(ProgramLesson.date_start.desc(), ProgramLesson.sort_order.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
     async def get_next_after(
         session: AsyncSession,
         lesson_key: str | None = None,
@@ -737,6 +900,21 @@ class DocumentRepository:
         return result.scalar_one_or_none()
 
     @staticmethod
+    async def get_visible_by_id(session: AsyncSession, user_id: int, document_id: int) -> Document | None:
+        stmt = select(Document).where(
+            and_(
+                Document.id == document_id,
+                Document.status == DocumentStatusEnum.ready,
+                or_(
+                    Document.visibility == VisibilityEnum.global_,
+                    and_(Document.visibility == VisibilityEnum.user, Document.owner_user_id == user_id),
+                ),
+            )
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    @staticmethod
     async def set_status(
         session: AsyncSession,
         document_id: int,
@@ -775,6 +953,35 @@ class DocumentRepository:
         return list(result.scalars().all())
 
     @staticmethod
+    async def list_visible_by_material_type(
+        session: AsyncSession,
+        user_id: int,
+        material_type: str,
+        limit: int = 50,
+    ) -> list[Document]:
+        stmt = (
+            select(Document)
+            .where(
+                and_(
+                    Document.status == DocumentStatusEnum.ready,
+                    Document.material_type == material_type,
+                    or_(
+                        Document.visibility == VisibilityEnum.global_,
+                        and_(Document.visibility == VisibilityEnum.user, Document.owner_user_id == user_id),
+                    ),
+                )
+            )
+            .order_by(
+                Document.lesson_date.desc().nulls_last(),
+                Document.module_number.desc().nulls_last(),
+                Document.created_at.desc(),
+            )
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
     async def list_visible_by_lesson(
         session: AsyncSession,
         user_id: int,
@@ -804,6 +1011,39 @@ class DocumentRepository:
                 )
             )
             .order_by(Document.module_number.asc().nulls_last(), Document.created_at.desc())
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def list_ready_global_by_lesson_and_type(
+        session: AsyncSession,
+        material_type: str,
+        lesson_key: str | None = None,
+        lesson_date=None,
+        limit: int = 20,
+    ) -> list[Document]:
+        if lesson_key and lesson_date:
+            lesson_filter = and_(Document.lesson_key == lesson_key, Document.lesson_date == lesson_date)
+        elif lesson_key:
+            lesson_filter = Document.lesson_key == lesson_key
+        elif lesson_date:
+            lesson_filter = Document.lesson_date == lesson_date
+        else:
+            return []
+
+        stmt = (
+            select(Document)
+            .where(
+                and_(
+                    Document.status == DocumentStatusEnum.ready,
+                    Document.visibility == VisibilityEnum.global_,
+                    Document.material_type == material_type,
+                    lesson_filter,
+                )
+            )
+            .order_by(Document.created_at.asc(), Document.id.asc())
             .limit(limit)
         )
         result = await session.execute(stmt)
@@ -864,6 +1104,15 @@ class ChunkRepository:
         session.add_all(chunks)
         await session.commit()
         return len(chunks)
+
+    @staticmethod
+    async def list_texts_by_document(session: AsyncSession, document_id: int) -> list[str]:
+        result = await session.execute(
+            select(Chunk.chunk_text)
+            .where(Chunk.document_id == document_id)
+            .order_by(Chunk.chunk_index.asc())
+        )
+        return [row[0] for row in result.all()]
 
     @staticmethod
     async def search_relevant(
@@ -1177,6 +1426,7 @@ class ProgramMediaRepository:
         created_by_user_id: int | None,
         telegram_file_unique_id: str | None = None,
         original_filename: str | None = None,
+        stored_path: str | None = None,
         file_size: int | None = None,
         mime_type: str | None = None,
         module_number: int | None = None,
@@ -1191,6 +1441,7 @@ class ProgramMediaRepository:
             telegram_file_id=telegram_file_id,
             telegram_file_unique_id=telegram_file_unique_id,
             telegram_kind=telegram_kind,
+            stored_path=stored_path,
             original_filename=original_filename,
             file_size=file_size,
             mime_type=mime_type,

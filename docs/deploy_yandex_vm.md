@@ -134,7 +134,7 @@ UPLOADS_DIR=./data/uploads
 MATERIALS_DIR=./data/materials
 
 MAX_FILE_SIZE_MB=20
-ALLOWED_EXTENSIONS=pdf,docx,pptx,txt
+ALLOWED_EXTENSIONS=pdf,docx,pptx,txt,vtt,srt,ott
 MAX_CONTEXT_CHUNKS=8
 MAX_CONTEXT_CHARS=12000
 MAX_USER_QUESTIONS_PER_MINUTE=10
@@ -275,4 +275,3 @@ Telegram polling должен работать только в одном мес
 - Не удалять Docker volumes.
 - Не открывать наружу PostgreSQL без необходимости.
 - Не давать SSH двум редакторам, если им хватает Telegram-админки.
-

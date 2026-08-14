@@ -15,6 +15,7 @@ htmlcov/
 data/uploads/*
 data/materials/*
 data/tmp/*
+data/private/*
 !data/uploads/.gitkeep
 !data/materials/.gitkeep
 !data/tmp/.gitkeep
@@ -26,6 +27,9 @@ data/tmp/*
 /*.xlsx
 logs/
 *.log
+shtuki.txt
+cloudflare-token*
+cloudflared-token*
 *.db
 *.sqlite3
 *.sqlite

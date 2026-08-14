@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.db.models import User
-from app.db.repositories import ErrorRepository, MessageRepository
+from app.bot.texts import SUPPORT_CONTACTS_TEXT
+from app.db.repositories import BotTextRepository, ErrorRepository, MessageRepository
 from app.llm.client import LLMClient
 from app.llm.prompts import SYSTEM_PROMPT
 from app.rag.service import RAGService
@@ -40,13 +41,44 @@ class ChatService:
         "Сначала мысленно проверь, действительно ли контекст отвечает на вопрос пользователя. "
         "Если контекст похож по словам, но про другую сущность, честно скажи, что точного ответа в загруженных материалах нет. "
         "Не обобщай один найденный файл до всего сезона, модуля или программы. "
-        "Не называй диагностику, тестирование, анкету или кикоф домашним заданием, если это явно не указано."
+        "Не называй диагностику, тестирование, анкету или кикоф домашним заданием, если это явно не указано. "
+        "Если вопрос про домашнее задание, не упоминай дату открытия задания: пользователю важен только срок сдачи."
+    )
+    TRANSCRIPT_RULE = (
+        "Если среди фрагментов есть type=transcript, используй транскрипцию как дополнительный контекст занятия. "
+        "Не приписывай реплики конкретным людям, если говорящий обозначен как Speaker 01, Speaker 07, неизвестный спикер "
+        "или похожим техническим именем. Не цитируй транскрипцию дословно без прямой просьбы пользователя; пересказывай смысл."
     )
 
     def __init__(self, settings: Settings, llm_client: LLMClient, rag_service: RAGService) -> None:
         self.settings = settings
         self.llm_client = llm_client
         self.rag_service = rag_service
+
+    async def answer_direct(
+        self,
+        session: AsyncSession,
+        user: User,
+        question: str,
+        answer: str,
+        mode: str,
+    ) -> ChatAnswer:
+        message = await MessageRepository.create(
+            session=session,
+            user_id=user.id,
+            mode=mode,
+            question=question,
+            answer=answer,
+            sources=[],
+            token_usage=None,
+        )
+        return ChatAnswer(
+            text=answer,
+            sources=[],
+            token_usage=None,
+            mode=mode,
+            message_id=message.id,
+        )
 
     async def answer_question(
         self,
@@ -112,10 +144,10 @@ class ChatService:
             return ChatAnswer(text=answer_text, sources=[], token_usage=None, mode=mode, message_id=message.id)
 
         if mode == "technical_question":
-            answer_text = (
-                "По техническим вопросам лучше сразу написать Илье в Telegram: @reptiloid0.\n\n"
-                "Он поможет с доступом, платформой ПРОГРЕСС, Moodle, записями занятий, загрузкой домашних заданий "
-                "и ошибками в работе бота."
+            answer_text = await BotTextRepository.get_value(
+                session,
+                "support_contacts",
+                SUPPORT_CONTACTS_TEXT,
             )
             message = await MessageRepository.create(
                 session=session,
@@ -134,6 +166,7 @@ class ChatService:
                 f"Дополнительный контекст раздела:\n{extra_context or 'Нет'}\n\n"
                 f"Описание проекта пользователя:\n{user_context_block}\n\n"
                 f"{self.GROUNDING_RULE}\n"
+                f"{self.TRANSCRIPT_RULE}\n"
                 f"{self.CONTACTS_RULE}\n"
                 f"{self.ANSWER_STYLE_RULE}"
             )
@@ -146,6 +179,7 @@ class ChatService:
                 "Если служебный контекст отвечает на вопрос, используй его. "
                 "Если ответа нет, прямо скажи, что точного ответа в загруженных материалах нет. "
                 f"{self.GROUNDING_RULE}\n"
+                f"{self.TRANSCRIPT_RULE}\n"
                 f"{self.ANSWER_STYLE_RULE}"
             )
 
@@ -202,6 +236,7 @@ class ChatService:
             "Ответь только на основе выбранного материала. "
             "Если в этом материале нет ответа, прямо скажи, что точного ответа в выбранном файле нет. "
             f"{self.GROUNDING_RULE}\n"
+            f"{self.TRANSCRIPT_RULE}\n"
             f"{self.CONTACTS_RULE}\n"
             f"{self.ANSWER_STYLE_RULE}"
         )

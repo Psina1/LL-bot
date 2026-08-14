@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8-sig", extra="ignore")
 
     telegram_bot_token: str = Field(alias="TELEGRAM_BOT_TOKEN")
     telegram_admin_ids: str = Field(default="", alias="TELEGRAM_ADMIN_IDS")
@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     openai_embedding_model: str = Field(default="text-embedding-3-small", alias="OPENAI_EMBEDDING_MODEL")
     openai_ocr_model: str | None = Field(default=None, alias="OPENAI_OCR_MODEL")
     llm_base_url: str | None = Field(default=None, alias="LLM_BASE_URL")
+    openai_transcription_api_key: str = Field(default="", alias="OPENAI_TRANSCRIPTION_API_KEY")
+    openai_transcription_model: str = Field(default="whisper-1", alias="OPENAI_TRANSCRIPTION_MODEL")
+    openai_transcription_base_url: str | None = Field(
+        default=None,
+        alias="OPENAI_TRANSCRIPTION_BASE_URL",
+    )
 
     bot_mode: Literal["polling"] = Field(default="polling", alias="BOT_MODE")
     env: str = Field(default="local", alias="ENV")
@@ -36,10 +42,12 @@ class Settings(BaseSettings):
     materials_dir: Path = Field(default=Path("./data/materials"), alias="MATERIALS_DIR")
 
     max_file_size_mb: int = Field(default=20, alias="MAX_FILE_SIZE_MB")
-    allowed_extensions: str = Field(default="pdf,docx,pptx,txt", alias="ALLOWED_EXTENSIONS")
+    allowed_extensions: str = Field(default="pdf,docx,pptx,txt,vtt,srt,ott", alias="ALLOWED_EXTENSIONS")
     max_context_chunks: int = Field(default=8, alias="MAX_CONTEXT_CHUNKS")
     max_context_chars: int = Field(default=12000, alias="MAX_CONTEXT_CHARS")
     max_user_questions_per_minute: int = Field(default=10, alias="MAX_USER_QUESTIONS_PER_MINUTE")
+    max_voice_duration_seconds: int = Field(default=180, alias="MAX_VOICE_DURATION_SECONDS")
+    max_voice_size_mb: int = Field(default=10, alias="MAX_VOICE_SIZE_MB")
     temperature: float = Field(default=0.2, alias="TEMPERATURE")
     embedding_dimensions: int = Field(default=1536, alias="EMBEDDING_DIMENSIONS")
     ocr_enabled: bool = Field(default=True, alias="OCR_ENABLED")
@@ -67,6 +75,11 @@ class Settings(BaseSettings):
         default="Видео-библиотека пока готовится. Если она будет работать через корпоративный VPN, доступ может зависеть от устройства и сети пользователя.",
         alias="VIDEO_ACCESS_NOTE",
     )
+    video_base_url: str | None = Field(default=None, alias="VIDEO_BASE_URL")
+    video_link_secret: str = Field(default="", alias="VIDEO_LINK_SECRET")
+    video_link_ttl_hours: int = Field(default=24, alias="VIDEO_LINK_TTL_HOURS")
+    video_web_host: str = Field(default="0.0.0.0", alias="VIDEO_WEB_HOST")
+    video_web_port: int = Field(default=8080, alias="VIDEO_WEB_PORT")
 
     notifications_enabled: bool = Field(default=True, alias="NOTIFICATIONS_ENABLED")
     notification_timezone: str = Field(default="Europe/Moscow", alias="NOTIFICATION_TIMEZONE")
@@ -90,6 +103,11 @@ class Settings(BaseSettings):
     @property
     def max_file_size_bytes(self) -> int:
         return self.max_file_size_mb * 1024 * 1024
+
+    @computed_field(return_type=int)
+    @property
+    def max_voice_size_bytes(self) -> int:
+        return self.max_voice_size_mb * 1024 * 1024
 
 
 @lru_cache(maxsize=1)

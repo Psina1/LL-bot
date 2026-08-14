@@ -10,6 +10,7 @@ MAIN_MENU_BUTTONS = [
 ]
 
 PROJECT_CONTEXT_MENU_BUTTON = [KeyboardButton(text="Уточнить контекст моего проекта")]
+DIRECTOR_DASHBOARD_MENU_BUTTON = [KeyboardButton(text="Кабинет руководителя")]
 
 
 PROJECT_CONTEXT_BUTTONS = [
@@ -54,13 +55,45 @@ NOTIFICATION_SETTINGS_BUTTONS = [
 
 
 ADMIN_MENU_BUTTONS = [
-    [KeyboardButton(text="Админ: обзор")],
-    [KeyboardButton(text="Админ: загрузить материал для ИИ и пользователей"), KeyboardButton(text="Админ: материалы")],
-    [KeyboardButton(text="Админ: техфайлы"), KeyboardButton(text="Админ: тексты")],
-    [KeyboardButton(text="Админ: автоуведомления"), KeyboardButton(text="Админ: ручное сообщение")],
+    [KeyboardButton(text="Статус и аналитика"), KeyboardButton(text="Управление материалами")],
+    [KeyboardButton(text="Обратная связь"), KeyboardButton(text="Уведомления и сообщения")],
+    [KeyboardButton(text="Тексты и оформление")],
+    [KeyboardButton(text="Кабинет руководителя")],
     [KeyboardButton(text="Главное меню")],
 ]
 
+ADMIN_STATUS_BUTTONS = [
+    [KeyboardButton(text="Состояние бота"), KeyboardButton(text="Активность участников")],
+    [KeyboardButton(text="Ошибки"), KeyboardButton(text="Расходы OpenAI")],
+    [KeyboardButton(text="Скачать CSV")],
+    [KeyboardButton(text="Админ: меню")],
+]
+
+ADMIN_MATERIALS_BUTTONS = [
+    [KeyboardButton(text="Добавить материал"), KeyboardButton(text="Добавить видео/подкаст")],
+    [KeyboardButton(text="Библиотека материалов"), KeyboardButton(text="Домашние задания в базе")],
+    [KeyboardButton(text="Сервисные действия")],
+    [KeyboardButton(text="Админ: меню")],
+]
+
+ADMIN_MATERIALS_SERVICE_BUTTONS = [
+    [KeyboardButton(text="Переиндексировать материалы")],
+    [KeyboardButton(text="Админ: материалы программы")],
+    [KeyboardButton(text="Админ: меню")],
+]
+
+ADMIN_NOTIFICATIONS_BUTTONS = [
+    [KeyboardButton(text="Ближайшие уведомления"), KeyboardButton(text="Настройки автоуведомлений")],
+    [KeyboardButton(text="Отправить сообщение"), KeyboardButton(text="Календарные файлы")],
+    [KeyboardButton(text="История отправок")],
+    [KeyboardButton(text="Админ: меню")],
+]
+
+ADMIN_CALENDAR_BUTTONS = [
+    [KeyboardButton(text="Загрузить ICS")],
+    [KeyboardButton(text="Админ: уведомления и сообщения")],
+    [KeyboardButton(text="Админ: меню")],
+]
 
 ADMIN_TECH_FILES_BUTTONS = [
     [KeyboardButton(text="Техфайл: ICS календаря")],
@@ -71,9 +104,9 @@ ADMIN_TECH_FILES_BUTTONS = [
 
 
 ADMIN_TEXTS_BUTTONS = [
-    [KeyboardButton(text="Изменить приветствие")],
-    [KeyboardButton(text="Изменить помощь")],
-    [KeyboardButton(text="Изменить расписание")],
+    [KeyboardButton(text="Изменить приветствие"), KeyboardButton(text="Изменить помощь")],
+    [KeyboardButton(text="Изменить расписание"), KeyboardButton(text="Картинка расписания")],
+    [KeyboardButton(text="Контакты поддержки")],
     [KeyboardButton(text="Админ: меню")],
 ]
 
@@ -97,6 +130,7 @@ ADMIN_MATERIAL_TYPE_BUTTONS = [
     [KeyboardButton(text="Тип: материалы занятия")],
     [KeyboardButton(text="Тип: домашнее задание")],
     [KeyboardButton(text="Тип: саммари")],
+    [KeyboardButton(text="Тип: транскрипция")],
     [KeyboardButton(text="Тип: расписание")],
     [KeyboardButton(text="Тип: другое")],
     [KeyboardButton(text="Админ: меню")],
@@ -131,10 +165,15 @@ ADMIN_MEDIA_MODULE_BUTTONS = [
 ]
 
 
-def main_menu_keyboard(show_project_context: bool = False) -> ReplyKeyboardMarkup:
+def main_menu_keyboard(
+    show_project_context: bool = False,
+    show_director_dashboard: bool = False,
+) -> ReplyKeyboardMarkup:
     keyboard = [row.copy() for row in MAIN_MENU_BUTTONS]
+    if show_director_dashboard:
+        keyboard.append(DIRECTOR_DASHBOARD_MENU_BUTTON.copy())
     if show_project_context:
-        keyboard.insert(3, PROJECT_CONTEXT_MENU_BUTTON)
+        keyboard.append(PROJECT_CONTEXT_MENU_BUTTON.copy())
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
@@ -174,6 +213,26 @@ def admin_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=ADMIN_MENU_BUTTONS, resize_keyboard=True)
 
 
+def admin_status_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=ADMIN_STATUS_BUTTONS, resize_keyboard=True)
+
+
+def admin_materials_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=ADMIN_MATERIALS_BUTTONS, resize_keyboard=True)
+
+
+def admin_materials_service_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=ADMIN_MATERIALS_SERVICE_BUTTONS, resize_keyboard=True)
+
+
+def admin_notifications_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=ADMIN_NOTIFICATIONS_BUTTONS, resize_keyboard=True)
+
+
+def admin_calendar_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=ADMIN_CALENDAR_BUTTONS, resize_keyboard=True)
+
+
 def admin_tech_files_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=ADMIN_TECH_FILES_BUTTONS, resize_keyboard=True)
 
@@ -182,6 +241,7 @@ def all_reply_button_labels() -> set[str]:
     keyboard_groups = [
         MAIN_MENU_BUTTONS,
         [PROJECT_CONTEXT_MENU_BUTTON],
+        [DIRECTOR_DASHBOARD_MENU_BUTTON],
         PROJECT_CONTEXT_BUTTONS,
         MATERIALS_SEASON_BUTTONS,
         MATERIALS_TYPE_BUTTONS,
@@ -190,6 +250,11 @@ def all_reply_button_labels() -> set[str]:
         PROJECT_HELP_BUTTONS,
         NOTIFICATION_SETTINGS_BUTTONS,
         ADMIN_MENU_BUTTONS,
+        ADMIN_STATUS_BUTTONS,
+        ADMIN_MATERIALS_BUTTONS,
+        ADMIN_MATERIALS_SERVICE_BUTTONS,
+        ADMIN_NOTIFICATIONS_BUTTONS,
+        ADMIN_CALENDAR_BUTTONS,
         ADMIN_TECH_FILES_BUTTONS,
         ADMIN_TEXTS_BUTTONS,
         ADMIN_MATERIAL_SEASON_BUTTONS,
@@ -270,12 +335,61 @@ def question_section_keyboard() -> InlineKeyboardMarkup:
 def materials_program_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Записи и материалы занятий", callback_data="materials:records")],
-            [InlineKeyboardButton(text="Подкасты на основе занятий", callback_data="materials:podcasts")],
-            [InlineKeyboardButton(text="Саммари занятий", callback_data="materials:summary")],
+            [InlineKeyboardButton(text="Последнее занятие", callback_data="materials:last_lesson")],
+            [InlineKeyboardButton(text="Выбрать занятие", callback_data="materials:choose_lesson")],
+            [InlineKeyboardButton(text="Все материалы", callback_data="materials:all")],
+            [InlineKeyboardButton(text="Подкасты", callback_data="materials:podcasts")],
+            [InlineKeyboardButton(text="Саммари", callback_data="materials:summary")],
             [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
         ]
     )
+
+
+def materials_lesson_card_keyboard(
+    lesson,
+    has_docs: bool = True,
+    has_summary: bool = False,
+    has_podcasts: bool = False,
+    has_video: bool = False,
+    has_homework: bool = False,
+    single_video_url: str | None = None,
+) -> InlineKeyboardMarkup:
+    keyboard = []
+    if single_video_url:
+        keyboard.append([InlineKeyboardButton(text="Смотреть запись", web_app=WebAppInfo(url=single_video_url))])
+        keyboard.append([InlineKeyboardButton(text="Открыть ссылкой", url=single_video_url)])
+    if has_docs:
+        keyboard.append([InlineKeyboardButton(text="Материалы и презентации", callback_data=f"materials:lesson_docs:{lesson.lesson_key}")])
+    if has_summary:
+        keyboard.append([InlineKeyboardButton(text="Саммари занятия", callback_data=f"materials:lesson_summary:{lesson.lesson_key}")])
+    if has_podcasts:
+        keyboard.append([InlineKeyboardButton(text="Подкаст", callback_data=f"materials:lesson_podcasts:{lesson.lesson_key}")])
+    if has_video and not single_video_url:
+        keyboard.append([InlineKeyboardButton(text="Видео", callback_data=f"materials:lesson_video:{lesson.lesson_key}")])
+    if has_homework:
+        keyboard.append([InlineKeyboardButton(text="Домашнее задание", callback_data=f"materials:lesson_homework:{lesson.lesson_key}")])
+    keyboard.append([InlineKeyboardButton(text="Выбрать другое занятие", callback_data="materials:choose_lesson")])
+    keyboard.append([InlineKeyboardButton(text="Главное меню", callback_data="menu:main")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def materials_blocks_keyboard(blocks) -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton(text=f"Блок {block_order}. {block_title}", callback_data=f"materials:block:{block_key}")]
+        for block_key, block_title, block_order in blocks
+    ]
+    keyboard.append([InlineKeyboardButton(text="Главное меню", callback_data="menu:main")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def materials_lessons_keyboard(lessons) -> InlineKeyboardMarkup:
+    keyboard = []
+    for lesson in lessons:
+        title = lesson.lesson_title if len(lesson.lesson_title) <= 56 else f"{lesson.lesson_title[:53]}..."
+        keyboard.append([InlineKeyboardButton(text=title, callback_data=f"materials:lesson:{lesson.lesson_key}")])
+    keyboard.append([InlineKeyboardButton(text="К блокам", callback_data=f"materials:choose_lesson")])
+    keyboard.append([InlineKeyboardButton(text="Главное меню", callback_data="menu:main")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def homework_program_keyboard() -> InlineKeyboardMarkup:
@@ -288,11 +402,13 @@ def homework_program_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def homework_list_keyboard(homeworks=None) -> InlineKeyboardMarkup:
+def homework_list_keyboard(homeworks=None, include_archive: bool = False) -> InlineKeyboardMarkup:
     keyboard = []
     for homework in (homeworks or [])[:20]:
         title = homework.title if len(homework.title) <= 54 else f"{homework.title[:51]}..."
         keyboard.append([InlineKeyboardButton(text=title, callback_data=f"homework:item:{homework.id}")])
+    if include_archive:
+        keyboard.append([InlineKeyboardButton(text="Архив ДЗ", callback_data="homework:archive")])
     keyboard.append([InlineKeyboardButton(text="Задай свой вопрос по заданию", callback_data="homework:help")])
     keyboard.append([InlineKeyboardButton(text="Главное меню", callback_data="menu:main")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -307,6 +423,34 @@ def homework_detail_keyboard(homework_id: int | None = None) -> InlineKeyboardMa
             [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
         ]
     )
+
+
+def _document_button_title(document) -> str:
+    date_suffix = ""
+    if getattr(document, "lesson_date", None):
+        date_suffix = f" ({document.lesson_date.strftime('%d.%m.%Y')})"
+    title = f"{document.title}{date_suffix}"
+    return title if len(title) <= 58 else f"{title[:55]}..."
+
+
+def document_list_keyboard(documents, include_main_menu: bool = True) -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton(text=_document_button_title(document), callback_data=f"document:send:{document.id}")]
+        for document in documents[:20]
+    ]
+    if include_main_menu:
+        keyboard.append([InlineKeyboardButton(text="Главное меню", callback_data="menu:main")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def summary_list_keyboard(documents, include_main_menu: bool = True) -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton(text=_document_button_title(document), callback_data=f"summary:send:{document.id}")]
+        for document in documents[:20]
+    ]
+    if include_main_menu:
+        keyboard.append([InlineKeyboardButton(text="Главное меню", callback_data="menu:main")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def _media_button_title(media) -> str:
@@ -399,11 +543,42 @@ def feedback_reason_keyboard(message_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def bot_feedback_score_keyboard(response_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=str(score), callback_data=f"bot_feedback:score:{response_id}:{score}")
+                for score in range(1, 6)
+            ],
+        ]
+    )
+
+
 def video_library_keyboard(video_url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Открыть видео внутри Telegram", web_app=WebAppInfo(url=video_url))],
             [InlineKeyboardButton(text="Открыть ссылку на видео", url=video_url)],
+        ]
+    )
+
+
+def video_watch_keyboard(video_url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Смотреть в Telegram", web_app=WebAppInfo(url=video_url))],
+            [InlineKeyboardButton(text="Открыть ссылкой", url=video_url)],
+            [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
+        ]
+    )
+
+
+def director_dashboard_keyboard(dashboard_url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Открыть кабинет руководителя", web_app=WebAppInfo(url=dashboard_url))],
+            [InlineKeyboardButton(text="Открыть ссылкой", url=dashboard_url)],
+            [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
         ]
     )
 
@@ -414,6 +589,17 @@ def admin_text_preview_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="Сохранить текст", callback_data="admin_text:save"),
                 InlineKeyboardButton(text="Отменить", callback_data="admin_text:cancel"),
+            ]
+        ]
+    )
+
+
+def admin_message_preview_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Отправить сообщение", callback_data="admin_message:send"),
+                InlineKeyboardButton(text="Отменить", callback_data="admin_message:cancel"),
             ]
         ]
     )

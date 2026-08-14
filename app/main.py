@@ -34,11 +34,13 @@ async def run_polling() -> None:
 
     logging.getLogger(__name__).info("Bot started in polling mode")
     notification_task = asyncio.create_task(container.notification_service.run(bot))
+    feedback_task = asyncio.create_task(container.feedback_service.run(bot))
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         notification_task.cancel()
-        await asyncio.gather(notification_task, return_exceptions=True)
+        feedback_task.cancel()
+        await asyncio.gather(notification_task, feedback_task, return_exceptions=True)
 
 
 if __name__ == "__main__":

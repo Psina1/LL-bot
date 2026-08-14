@@ -33,5 +33,24 @@ services:
       - ./data:/app/data
     command: python -m app.main
 
+  video-web:
+    build: .
+    container_name: leader_bot_video_web
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-leader_bot}
+      VIDEO_WEB_HOST: 0.0.0.0
+      VIDEO_WEB_PORT: 8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${VIDEO_WEB_PORT:-8080}:8080"
+    volumes:
+      - ./data:/app/data:ro
+    command: python -m app.video_web
+
 volumes:
   postgres_data:

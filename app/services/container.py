@@ -7,7 +7,9 @@ from app.llm.client import LLMClient
 from app.rag.service import RAGService
 from app.services.chat_service import ChatService
 from app.services.document_service import DocumentService
+from app.services.feedback_service import FeedbackService
 from app.services.notification_service import NotificationService
+from app.services.transcription_service import TranscriptionService
 
 
 @dataclass(slots=True)
@@ -18,6 +20,8 @@ class AppContainer:
     chat_service: ChatService
     document_service: DocumentService
     notification_service: NotificationService
+    feedback_service: FeedbackService
+    transcription_service: TranscriptionService
 
 
 def create_container() -> AppContainer:
@@ -27,6 +31,8 @@ def create_container() -> AppContainer:
     chat_service = ChatService(settings=settings, llm_client=llm_client, rag_service=rag_service)
     document_service = DocumentService(settings=settings, rag_service=rag_service)
     notification_service = NotificationService(settings=settings)
+    feedback_service = FeedbackService(settings=settings)
+    transcription_service = TranscriptionService(settings=settings)
     return AppContainer(
         settings=settings,
         llm_client=llm_client,
@@ -34,4 +40,6 @@ def create_container() -> AppContainer:
         chat_service=chat_service,
         document_service=document_service,
         notification_service=notification_service,
+        feedback_service=feedback_service,
+        transcription_service=transcription_service,
     )

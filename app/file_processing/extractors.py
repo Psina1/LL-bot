@@ -49,6 +49,29 @@ def extract_text_from_txt(file_path: Path) -> str:
     return raw_text
 
 
+def extract_text_from_subtitle(file_path: Path) -> str:
+    raw_text = file_path.read_text(encoding="utf-8", errors="ignore")
+    lines: list[str] = []
+    previous_line = ""
+    for raw_line in raw_text.splitlines():
+        line = raw_line.strip()
+        if not line or line.upper() == "WEBVTT" or line.startswith("NOTE"):
+            continue
+        if re.match(r"^\d+$", line):
+            continue
+        if re.match(r"^\d{1,2}:\d{2}:\d{2}[,.]\d{3}\s+-->\s+\d{1,2}:\d{2}:\d{2}[,.]\d{3}", line):
+            continue
+        if re.match(r"^\d{2}:\d{2}[,.]\d{3}\s+-->\s+\d{2}:\d{2}[,.]\d{3}", line):
+            continue
+        line = re.sub(r"<[^>]+>", "", line)
+        line = unescape(line).strip()
+        if not line or line == previous_line:
+            continue
+        previous_line = line
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def looks_like_html(text: str) -> bool:
     sample = text[:5000].lower()
     return bool(re.search(r"<!doctype\s+html|<html[\s>]|<body[\s>]|</(div|p|span|script|style|html)>", sample))
@@ -93,6 +116,8 @@ def extract_text_from_file(file_path: Path) -> str:
     suffix = file_path.suffix.lower().replace(".", "")
     if suffix == "txt":
         text = extract_text_from_txt(file_path)
+    elif suffix in {"vtt", "srt", "ott"}:
+        text = extract_text_from_subtitle(file_path)
     elif suffix == "pdf":
         text = extract_text_from_pdf(file_path)
     elif suffix == "docx":

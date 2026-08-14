@@ -97,6 +97,58 @@ class AllowedUser(Base):
     )
 
 
+class DirectorAssignment(Base):
+    __tablename__ = "director_assignments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    director_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    employee_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "director_telegram_id",
+            "employee_telegram_id",
+            name="uq_director_assignment_pair",
+        ),
+        Index("ix_director_assignments_active_director", "is_active", "director_telegram_id"),
+    )
+
+
+class DirectorReminderLog(Base):
+    __tablename__ = "director_reminder_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    director_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    employee_telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    employee_name: Mapped[str] = mapped_column(String(512))
+    template_key: Mapped[str] = mapped_column(String(100), default="director_attention_reminder")
+    reminder_text: Mapped[str] = mapped_column(Text)
+    reminder_hash: Mapped[str] = mapped_column(String(64))
+    delivery_mode: Mapped[str] = mapped_column(String(50), default="admin_test")
+    status: Mapped[str] = mapped_column(String(50), default="sent")
+    sent_recipient_ids: Mapped[list[int]] = mapped_column(JSONB().with_variant(JSON, "sqlite"), default=list)
+    failed_recipient_ids: Mapped[list[int]] = mapped_column(JSONB().with_variant(JSON, "sqlite"), default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_director_reminder_logs_director_created", "director_telegram_id", "created_at"),
+        Index("ix_director_reminder_logs_employee_created", "director_telegram_id", "employee_name", "created_at"),
+        Index(
+            "ix_director_reminder_logs_hash_created",
+            "director_telegram_id",
+            "employee_name",
+            "reminder_hash",
+            "created_at",
+        ),
+    )
+
+
 class Document(Base):
     __tablename__ = "documents"
 
@@ -188,6 +240,32 @@ class MessageFeedback(Base):
     __table_args__ = (UniqueConstraint("message_id", "user_id", name="uq_message_feedback_message_user"),)
 
 
+class BotFeedbackResponse(Base):
+    __tablename__ = "bot_feedback_responses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    full_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    source: Mapped[str] = mapped_column(String(100), default="deep_link")
+    status: Mapped[str] = mapped_column(String(50), default="in_progress", index=True)
+    usefulness_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    useful_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    improvement_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    missing_feature_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_bot_feedback_user_created", "user_id", "created_at"),
+        Index("ix_bot_feedback_status_created", "status", "created_at"),
+    )
+
+
 class UserEvent(Base):
     __tablename__ = "user_events"
 
@@ -245,6 +323,125 @@ class NotificationDelivery(Base):
             "scheduled_time",
             name="uq_notification_delivery_user_key_date_time",
         ),
+    )
+
+
+class FeedbackCampaign(Base):
+    __tablename__ = "feedback_campaigns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lesson_id: Mapped[int] = mapped_column(ForeignKey("program_lessons.id", ondelete="CASCADE"), index=True)
+    lesson_key: Mapped[str] = mapped_column(String(100), index=True)
+    lesson_title: Mapped[str] = mapped_column(String(500))
+    lesson_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    experts: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    initial_text_override: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reminder_text_override: Mapped[str | None] = mapped_column(Text, nullable=True)
+    usefulness_question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    experts_question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    valuable_question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    improvement_question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="draft", server_default="draft", index=True)
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    launch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    responses: Mapped[list["FeedbackResponse"]] = relationship(
+        back_populates="campaign",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        Index("ix_feedback_campaigns_lesson_status", "lesson_key", "status"),
+    )
+
+
+class FeedbackResponse(Base):
+    __tablename__ = "feedback_responses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    campaign_id: Mapped[int] = mapped_column(
+        ForeignKey("feedback_campaigns.id", ondelete="CASCADE"),
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(30), default="pending", server_default="pending", index=True)
+    current_step: Mapped[str] = mapped_column(
+        String(30),
+        default="invitation",
+        server_default="invitation",
+    )
+    usefulness_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    experts_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    valuable_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    valuable_input_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    valuable_voice_file_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    valuable_transcription_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    improvement_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    improvement_input_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    improvement_voice_file_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    improvement_transcription_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    reminder_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    next_reminder_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    initial_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_reminder_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    campaign: Mapped["FeedbackCampaign"] = relationship(back_populates="responses")
+    user: Mapped["User"] = relationship()
+    deliveries: Mapped[list["FeedbackDelivery"]] = relationship(
+        back_populates="response",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("campaign_id", "user_id", name="uq_feedback_response_campaign_user"),
+        Index("ix_feedback_responses_due", "status", "next_reminder_at"),
+    )
+
+
+class FeedbackDelivery(Base):
+    __tablename__ = "feedback_deliveries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    campaign_id: Mapped[int] = mapped_column(
+        ForeignKey("feedback_campaigns.id", ondelete="CASCADE"),
+        index=True,
+    )
+    response_id: Mapped[int] = mapped_column(
+        ForeignKey("feedback_responses.id", ondelete="CASCADE"),
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    delivery_type: Mapped[str] = mapped_column(String(30))
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending")
+    error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    response: Mapped["FeedbackResponse"] = relationship(back_populates="deliveries")
+
+    __table_args__ = (
+        UniqueConstraint("response_id", "delivery_type", name="uq_feedback_delivery_response_type"),
+        Index("ix_feedback_deliveries_status_scheduled", "status", "scheduled_at"),
     )
 
 
@@ -331,6 +528,7 @@ class ProgramMedia(Base):
     telegram_file_id: Mapped[str] = mapped_column(String(512))
     telegram_file_unique_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     telegram_kind: Mapped[str] = mapped_column(String(50))
+    stored_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     original_filename: Mapped[str | None] = mapped_column(String(500), nullable=True)
     file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)

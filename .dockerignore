@@ -9,9 +9,10 @@ __pycache__/
 .ruff_cache/
 .venv/
 venv/
-data/uploads/
-data/materials/
-data/tmp/
+data/
+materials_library/
+reports/
+fichi/
 logs/
 *.log
 *.db
