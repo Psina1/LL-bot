@@ -455,21 +455,21 @@ def render_director_dashboard_html(data: dict) -> str:
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap&subset=cyrillic" rel="stylesheet">
   <style>
     :root {{
-      --bg: #f2f2f2;
-      --surface: #ffffff;
-      --text: #121239;
-      --muted: #5f6076;
-      --line: rgba(18, 18, 57, .14);
-      --accent: #7949f4;
-      --green: #71f270;
-      --red: #f9423a;
-      --yellow: #f9c546;
+      --bg: #f7f7f3;
+      --surface: #fff;
+      --text: #08080a;
+      --muted: #686b72;
+      --line: rgba(8, 8, 10, .13);
+      --accent: #704ceb;
+      --green: #43b264;
+      --red: #e55145;
+      --yellow: #f3b341;
     }}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
       min-height: 100vh;
-      font-family: "Montserrat", "Segoe UI", Arial, sans-serif;
+      font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
       color: var(--text);
       background: var(--bg);
     }}
@@ -596,18 +596,18 @@ def render_director_placeholder_html(settings) -> str:
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap&subset=cyrillic" rel="stylesheet">
   <style>
     :root {{
-      --bg: #f2f2f2;
-      --surface: #ffffff;
-      --text: #121239;
-      --muted: #5f6076;
-      --line: rgba(18, 18, 57, .14);
-      --accent: #7949f4;
+      --bg: #f7f7f3;
+      --surface: #fff;
+      --text: #08080a;
+      --muted: #686b72;
+      --line: rgba(8, 8, 10, .13);
+      --accent: #704ceb;
     }}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
       min-height: 100vh;
-      font-family: "Montserrat", "Segoe UI", Arial, sans-serif;
+      font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
       color: var(--text);
       background: var(--bg);
     }}
@@ -1095,37 +1095,37 @@ def render_director_progress_dashboard_html(data: dict) -> str:
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap&subset=cyrillic" rel="stylesheet">
   <style>
     :root {{
-      --bg: #f2f2f2;
-      --ink: #121239;
-      --muted: #5f6076;
-      --line: rgba(18, 18, 57, .14);
-      --soft: #ffffff;
-      --purple: #7949f4;
-      --violet: #c252f7;
-      --blue: #002fa7;
-      --sky: #58c0ed;
-      --red-brand: #f9423a;
-      --yellow-brand: #f9c546;
-      --paper: #ffffff;
-      --dark: #121239;
-      --green: #71f270;
-      --yellow: #f9c546;
-      --red: #f9423a;
-      --gray: #a2acab;
-      --cyan: #58c0ed;
-      --shadow: 0 18px 42px rgba(18, 18, 57, .10);
+      --bg: #ccff00;
+      --ink: #1200ff;
+      --muted: #ff00cc;
+      --line: #ff0000;
+      --soft: #00ffea;
+      --purple: #ff00ff;
+      --violet: #00ff00;
+      --blue: #001eff;
+      --sky: #00ffff;
+      --red-brand: #ff3b00;
+      --yellow-brand: #ffff00;
+      --paper: #fffb00;
+      --dark: #000000;
+      --green: #39ff14;
+      --yellow: #fff200;
+      --red: #ff0066;
+      --gray: #ff7a00;
+      --cyan: #00ffff;
+      --shadow: 11px 11px 0 #ff00ff;
     }}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
       min-height: 100vh;
       background:
-        linear-gradient(90deg, rgba(18,18,57,.045) 1px, transparent 1px),
-        linear-gradient(180deg, rgba(18,18,57,.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(121,73,244,.05) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(18,18,57,.045) 1px, transparent 1px),
         var(--bg);
       background-size: 22px 22px;
       color: var(--ink);
-      font-family: "Montserrat", "Segoe UI", Arial, sans-serif;
+      font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
     }}
     body,
     button,
@@ -1133,7 +1133,7 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     input,
     select,
     summary {{
-      font-family: "Montserrat", "Segoe UI", Arial, sans-serif !important;
+      font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif !important;
     }}
     .llm-page {{
       width: min(1180px, 100%);
@@ -1142,25 +1142,26 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     }}
     .llm-hero {{
       padding: clamp(22px, 5vw, 46px);
-      border: 1px solid var(--line);
-      border-radius: 28px;
+      border: 8px dotted var(--line);
+      border-radius: 6px 38px 8px 42px;
       background:
-        linear-gradient(135deg, rgba(121, 73, 244, .12), rgba(88, 192, 237, .10)),
-        var(--paper);
-      box-shadow: var(--shadow);
+        repeating-linear-gradient(135deg, #ff00ff 0 16px, #00ffff 16px 32px, #ffff00 32px 48px);
+      box-shadow: var(--shadow), -9px -7px 0 #39ff14;
       position: relative;
       overflow: hidden;
+      transform: rotate(-1.2deg);
     }}
     .llm-hero h1 {{
       margin: 0;
       max-width: 790px;
       font-size: clamp(34px, 8vw, 74px);
       line-height: .96;
-      letter-spacing: -.06em;
+      letter-spacing: .08em;
       text-transform: uppercase;
       position: relative;
       z-index: 1;
-      color: var(--ink);
+      color: #39ff14;
+      text-shadow: 4px 4px 0 #000, 8px 8px 0 #ff3b00, -4px -4px 0 #001eff;
     }}
     .llm-hero-meta {{
       display: flex;
@@ -1175,10 +1176,10 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     }}
     .llm-hero-meta span {{
       padding: 9px 12px;
-      border: 1px solid var(--line);
+      border: 2px solid var(--line);
       border-radius: 999px;
-      background: #ffffff;
-      color: var(--ink);
+      background: #ff00ff;
+      color: #ffff00;
     }}
     .llm-kpis {{
       display: grid;
@@ -1189,16 +1190,17 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     .llm-kpi {{
       min-height: 118px;
       padding: 18px;
-      border: 1px solid var(--line);
-      border-radius: 22px;
-      background: var(--paper);
-      box-shadow: var(--shadow);
+      border: 3px solid var(--line);
+      border-radius: 4px 28px 4px 28px;
+      background: #00ffea;
+      box-shadow: 7px 7px 0 #ff00ff;
+      transform: skew(-2deg);
     }}
-    .llm-kpi:nth-child(1) {{ border-top: 5px solid var(--purple); }}
-    .llm-kpi:nth-child(2) {{ border-top: 5px solid var(--red-brand); }}
-    .llm-kpi:nth-child(3) {{ border-top: 5px solid var(--blue); }}
-    .llm-kpi:nth-child(4) {{ border-top: 5px solid var(--sky); }}
-    .llm-kpi:nth-child(5) {{ border-top: 5px solid var(--yellow-brand); }}
+    .llm-kpi:nth-child(2) {{ background: #ffff00; }}
+    .llm-kpi:nth-child(3) {{ background: #ff00ff; color: #00ff00; }}
+    .llm-kpi:nth-child(4) {{ background: #00ff00; }}
+    .llm-kpi:nth-child(5) {{ background: #ff3b00; color: #001eff; }}
+    .llm-kpi:nth-child(5) strong {{ color: #ffff00; }}
     .llm-kpi strong {{
       display: block;
       font-size: clamp(28px, 5vw, 44px);
@@ -1220,10 +1222,10 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       gap: 10px;
       margin: 34px 0 14px;
       padding: 9px 13px;
-      border-left: 6px solid var(--red-brand);
-      border-radius: 18px;
-      background: #ffffff;
-      box-shadow: var(--shadow);
+      border: 3px solid var(--line);
+      border-radius: 0;
+      background: #39ff14;
+      box-shadow: 7px 7px 0 #ff00ff;
       font-size: 18px;
       letter-spacing: -.03em;
       text-transform: uppercase;
@@ -1234,7 +1236,7 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       height: 12px;
       border-radius: 999px;
       background: var(--purple);
-      border: 0;
+      border: 2px solid var(--ink);
     }}
     .llm-cards {{
       display: grid;
@@ -1242,19 +1244,20 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       gap: 16px;
     }}
     .llm-person-card {{
-      border: 1px solid var(--line);
-      border-radius: 24px;
-      background: #ffffff;
+      border: 3px solid var(--line);
+      border-radius: 0 30px 0 30px;
+      background: #ffff00;
       padding: 18px;
-      box-shadow: var(--shadow);
+      box-shadow: 9px 6px 0 #ff00ff;
       position: relative;
       overflow: hidden;
+      transform: rotate(.5deg);
     }}
     .llm-person-card::before {{
       content: "";
       position: absolute;
       inset: 0 0 auto 0;
-      height: 5px;
+      height: 8px;
       background: var(--cyan);
     }}
     .llm-person-card:nth-child(2n)::before {{ background: var(--violet); }}
@@ -1284,7 +1287,7 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     .llm-person-status {{
       flex: 0 0 auto;
       padding: 8px 10px;
-      border: 1px solid var(--line);
+      border: 2px solid var(--line);
       border-radius: 999px;
       color: var(--muted);
       font-size: 11px;
@@ -1307,7 +1310,7 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     .llm-progress {{
       height: 10px;
       margin-top: 8px;
-      border: 1px solid var(--line);
+      border: 2px solid var(--ink);
       border-radius: 999px;
       background: #fff;
       overflow: hidden;
@@ -1324,7 +1327,7 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     }}
     .llm-chip-row span {{
       padding: 7px 9px;
-      border: 1px solid rgba(18, 18, 57, .14);
+      border: 2px solid rgba(18, 18, 57, .18);
       border-radius: 999px;
       background: var(--soft);
       color: #2a2a54;
@@ -1339,34 +1342,34 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     .llm-card-actions button,
     .llm-modal-actions button {{
       min-height: 44px;
-      border: 0;
-      border-radius: 999px;
-      background: var(--red-brand);
-      color: #ffffff;
+      border: 3px solid var(--ink);
+      border-radius: 2px 18px 2px 18px;
+      background: #ff3b00;
+      color: #39ff14;
       padding: 10px 15px;
       font-weight: 800;
       cursor: pointer;
-      box-shadow: 0 10px 22px rgba(249, 66, 58, .18);
+      box-shadow: 3px 3px 0 var(--ink);
       transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
     }}
     .llm-card-actions button:hover,
     .llm-modal-actions button:hover {{
-      background: var(--purple);
-      color: #ffffff;
+      background: #00ffff;
+      color: #ff00ff;
       transform: translate(-1px, -1px);
-      box-shadow: 0 12px 26px rgba(121, 73, 244, .20);
+      box-shadow: 5px 5px 0 var(--ink);
     }}
     .llm-card-actions button:active,
     .llm-modal-actions button:active {{
       transform: translate(2px, 2px);
-      box-shadow: none;
+      box-shadow: 1px 1px 0 var(--ink);
     }}
     .llm-card-actions button:disabled,
     .llm-modal-actions button:disabled {{
       cursor: progress;
       opacity: .68;
       transform: none;
-      box-shadow: none;
+      box-shadow: 2px 2px 0 var(--ink);
     }}
     details {{
       margin-top: 14px;
@@ -1381,7 +1384,7 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     }}
     .llm-detail-block {{
       margin-top: 12px;
-      border: 1px solid var(--line);
+      border: 2px solid var(--line);
       border-radius: 18px;
       overflow: hidden;
     }}
@@ -1415,7 +1418,7 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       height: 28px;
       display: inline-grid;
       place-items: center;
-      border: 2px solid var(--gray);
+      border: 3px solid var(--gray);
       background: #fff;
       font-size: 11px;
       font-weight: 800;
@@ -1426,10 +1429,10 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     .llm-dot.is-planned {{ border-color: var(--gray); background: #f5f6f8; color: #98a2b3; }}
     .llm-journal {{
       margin-top: 22px;
-      border: 1px solid var(--line);
-      border-radius: 24px;
-      background: #ffffff;
-      box-shadow: var(--shadow);
+      border: 3px solid var(--line);
+      border-radius: 0;
+      background: #ff00ff;
+      box-shadow: 10px 10px 0 #39ff14;
       overflow: hidden;
     }}
     .llm-journal-head {{
@@ -1438,9 +1441,8 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       justify-content: space-between;
       gap: 12px;
       padding: 14px 16px;
-      border-bottom: 1px solid var(--line);
-      background: var(--dark);
-      color: #ffffff;
+      border-bottom: 2px solid var(--line);
+      background: #00ffff;
     }}
     .llm-journal-head h2 {{
       margin: 0;
@@ -1449,7 +1451,7 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     }}
     .llm-journal-head span {{
       padding: 7px 10px;
-      border: 1px solid rgba(255,255,255,.28);
+      border: 2px solid var(--ink);
       border-radius: 999px;
       background: var(--purple);
       color: #ffffff;
@@ -1508,11 +1510,11 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     }}
     .llm-matrix {{
       margin-top: 14px;
-      border: 1px solid var(--line);
-      border-radius: 24px;
+      border: 3px solid var(--line);
+      border-radius: 0;
       overflow: auto;
-      background: #ffffff;
-      box-shadow: var(--shadow);
+      background: #ccff00;
+      box-shadow: 12px 8px 0 #ff00ff;
     }}
     .llm-matrix table {{
       width: max-content;
@@ -1533,7 +1535,7 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       position: sticky;
       top: 0;
       z-index: 2;
-      background: var(--soft);
+      background: #ffff00;
       color: #424a57;
       font-size: 11px;
     }}
@@ -1552,10 +1554,10 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       gap: 16px;
       margin-top: 28px;
       border: 3px solid var(--ink);
-      border-radius: 28px;
-      background: var(--dark);
-      color: #ffffff;
-      box-shadow: var(--shadow);
+      border-radius: 2px 44px 2px 44px;
+      background: #001eff;
+      color: #39ff14;
+      box-shadow: 12px 12px 0 #ff00ff;
       overflow: hidden;
     }}
     .llm-neuro-copy {{
@@ -1630,9 +1632,9 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       width: min(560px, 100%);
       border: 3px solid var(--line);
       border-radius: 0;
-      background: #ffffff;
+      background: #ffff00;
       padding: 18px;
-      box-shadow: var(--shadow);
+      box-shadow: 12px 12px 0 #ff00ff;
     }}
     .llm-dialog h2 {{ margin: 0; font-size: 22px; letter-spacing: -.04em; }}
     .llm-dialog p {{ color: var(--muted); font-size: 13px; line-height: 1.5; }}
@@ -1678,7 +1680,7 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       .llm-hero, .llm-person-card, .llm-journal, .llm-matrix, .llm-neuro {{
         border-width: 2px;
         border-radius: 0 24px 0 24px;
-        box-shadow: var(--shadow);
+        box-shadow: 7px 7px 0 #ff00ff;
       }}
       .llm-kpis {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
       .llm-cards {{ grid-template-columns: 1fr; gap: 10px; }}
