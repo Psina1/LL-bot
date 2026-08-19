@@ -469,7 +469,7 @@ def render_director_dashboard_html(data: dict) -> str:
     body {{
       margin: 0;
       min-height: 100vh;
-      font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+      font-family: "Montserrat", "Segoe UI", Arial, sans-serif;
       color: var(--text);
       background: var(--bg);
     }}
@@ -607,7 +607,7 @@ def render_director_placeholder_html(settings) -> str:
     body {{
       margin: 0;
       min-height: 100vh;
-      font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+      font-family: "Montserrat", "Segoe UI", Arial, sans-serif;
       color: var(--text);
       background: var(--bg);
     }}
@@ -1125,7 +1125,7 @@ def render_director_progress_dashboard_html(data: dict) -> str:
         var(--bg);
       background-size: 22px 22px;
       color: var(--ink);
-      font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+      font-family: "Montserrat", "Segoe UI", Arial, sans-serif;
     }}
     body,
     button,
@@ -1133,7 +1133,7 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     input,
     select,
     summary {{
-      font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif !important;
+      font-family: "Montserrat", "Segoe UI", Arial, sans-serif !important;
     }}
     .llm-page {{
       width: min(1180px, 100%);
