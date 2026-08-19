@@ -33,7 +33,7 @@ from app.db.models import (
 )
 from app.db.repositories import ProgramMediaRepository
 from app.db.session import SessionLocal
-from app.services.director_dashboard import DIRECTOR_DISPLAY_NAMES, DIRECTOR_TEST_TEAMS
+from app.services.director_dashboard import DIRECTOR_DISPLAY_NAMES
 from app.services.video_links import verify_director_dashboard_token, verify_video_watch_token
 
 logger = logging.getLogger(__name__)
@@ -305,6 +305,9 @@ async def load_director_dashboard_data(telegram_id: int, admin_ids: list[int]) -
         viewer = (
             await session.execute(select(User).where(User.telegram_id == telegram_id).limit(1))
         ).scalar_one_or_none()
+        viewer_allowed = (
+            await session.execute(select(AllowedUser).where(AllowedUser.telegram_id == telegram_id).limit(1))
+        ).scalar_one_or_none()
         is_admin = telegram_id in set(admin_ids)
 
         base_stmt = (
@@ -391,7 +394,7 @@ async def load_director_dashboard_data(telegram_id: int, admin_ids: list[int]) -
             or 0
         )
 
-    if viewer is None and not is_admin:
+    if viewer is None and viewer_allowed is None and not is_admin:
         return {"allowed": False, "reason": "viewer_not_found"}
 
     if not is_admin and not rows:
@@ -402,6 +405,7 @@ async def load_director_dashboard_data(telegram_id: int, admin_ids: list[int]) -
         "mode": mode,
         "anonymize": anonymize,
         "viewer": viewer,
+        "viewer_allowed": viewer_allowed,
         "rows": rows,
         "current_homework_count": current_homework_count,
     }
@@ -465,7 +469,7 @@ def render_director_dashboard_html(data: dict) -> str:
     body {{
       margin: 0;
       min-height: 100vh;
-      font-family: "Montserrat", "Segoe UI", Arial, sans-serif;
+      font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
       color: var(--text);
       background: var(--bg);
     }}
@@ -603,7 +607,7 @@ def render_director_placeholder_html(settings) -> str:
     body {{
       margin: 0;
       min-height: 100vh;
-      font-family: "Montserrat", "Segoe UI", Arial, sans-serif;
+      font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
       color: var(--text);
       background: var(--bg);
     }}
@@ -699,24 +703,77 @@ def sanitize_director_cell(cell: dict) -> dict:
     return safe_cell
 
 
-def build_mock_director_progress_data(settings, telegram_id: int) -> dict | None:
-    team = DIRECTOR_TEST_TEAMS.get(telegram_id)
-    if team is None:
-        return None
+def director_name_tokens(value: str | None) -> set[str]:
+    normalized = (value or "").lower().replace("ё", "е")
+    normalized = re.sub(r"[^a-zа-я0-9]+", " ", normalized)
+    return {token for token in normalized.split() if token}
 
+
+def director_person_matches(row, person: dict) -> bool:
+    row_tokens = director_name_tokens(participant_display_name(row))
+    person_tokens = director_name_tokens(str(person.get("name") or ""))
+    if len(row_tokens) < 2 or len(person_tokens) < 2:
+        return False
+    return len(row_tokens & person_tokens) >= 2
+
+
+def build_missing_director_person(row) -> dict:
+    return {
+        "id": str(row.telegram_id),
+        "telegramId": row.telegram_id,
+        "name": participant_display_name(row),
+        "department": "нет данных в последней выгрузке",
+        "score": 0,
+        "available": 0,
+        "seasonMax": 0,
+        "percent": 0,
+        "certificate": "нет данных",
+        "cells": [],
+    }
+
+
+def build_real_director_progress_data(settings, data: dict, telegram_id: int, admin_ids: list[int]) -> dict | None:
     source = load_director_dashboard_source(settings)
     if source is None:
         return None
 
-    director_label, offset = team
-    source_people = list(source.get("participants") or [])[offset : offset + 5]
+    is_admin = telegram_id in set(admin_ids)
     neuro_placeholder = choose_director_placeholder(settings)
+    if is_admin:
+        people_source = list(source.get("participants") or [])
+        team_title = "Все сотрудники программы"
+        director_label = DIRECTOR_DISPLAY_NAMES.get(telegram_id, str(telegram_id))
+    else:
+        people_source = []
+        used_source_ids: set[str] = set()
+        for row in data.get("rows") or []:
+            matched_person = None
+            for person in source.get("participants") or []:
+                source_id = str(person.get("id") or "")
+                if source_id in used_source_ids:
+                    continue
+                if director_person_matches(row, person):
+                    matched_person = person
+                    used_source_ids.add(source_id)
+                    break
+            people_source.append(matched_person or build_missing_director_person(row))
+
+        viewer = data.get("viewer")
+        viewer_allowed = data.get("viewer_allowed")
+        viewer_name = (
+            getattr(viewer, "full_name", None)
+            or getattr(viewer, "username", None)
+            or getattr(viewer_allowed, "full_name", None)
+            or getattr(viewer_allowed, "username", None)
+            or str(telegram_id)
+        )
+        team_title = f"Команда: {viewer_name}"
+        director_label = viewer_name
+
     people = []
-    for index, person in enumerate(source_people, start=1):
+    for person in people_source:
         safe_person = deepcopy(person)
-        safe_person["id"] = f"{telegram_id}-{index}"
-        safe_person["name"] = f"Сотрудник {director_label} {index}"
-        safe_person["department"] = f"Команда {director_label}"
+        safe_person["id"] = str(safe_person.get("id") or safe_person.get("telegramId") or safe_person.get("name") or "")
         safe_person["certificate"] = person.get("certificate") or "В плане"
         safe_person["cells"] = [sanitize_director_cell(cell) for cell in person.get("cells") or []]
         people.append(safe_person)
@@ -724,7 +781,7 @@ def build_mock_director_progress_data(settings, telegram_id: int) -> dict | None
     return {
         "updatedAt": source.get("updatedAt") or "",
         "asOf": source.get("asOf") or "",
-        "teamTitle": f"Команда {director_label}",
+        "teamTitle": team_title,
         "directorLabel": director_label,
         "participants": people,
         "points": source.get("points") or [],
@@ -1038,24 +1095,25 @@ def render_director_progress_dashboard_html(data: dict) -> str:
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap&subset=cyrillic" rel="stylesheet">
   <style>
     :root {{
-      --bg: #ffffff;
-      --ink: #121239;
-      --muted: #5f6076;
-      --line: #121239;
-      --soft: #f2f2f2;
-      --purple: #7949f4;
-      --violet: #c252f7;
-      --blue: #002fa7;
-      --sky: #58c0ed;
-      --red-brand: #f9423a;
-      --yellow-brand: #f9c546;
-      --paper: #f7f5ff;
-      --dark: #121239;
-      --green: #71f270;
-      --yellow: #f9c546;
-      --red: #f9423a;
-      --gray: #a2acab;
-      --shadow: 6px 6px 0 var(--ink);
+      --bg: #ccff00;
+      --ink: #1200ff;
+      --muted: #ff00cc;
+      --line: #ff0000;
+      --soft: #00ffea;
+      --purple: #ff00ff;
+      --violet: #00ff00;
+      --blue: #001eff;
+      --sky: #00ffff;
+      --red-brand: #ff3b00;
+      --yellow-brand: #ffff00;
+      --paper: #fffb00;
+      --dark: #000000;
+      --green: #39ff14;
+      --yellow: #fff200;
+      --red: #ff0066;
+      --gray: #ff7a00;
+      --cyan: #00ffff;
+      --shadow: 11px 11px 0 #ff00ff;
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -1067,7 +1125,15 @@ def render_director_progress_dashboard_html(data: dict) -> str:
         var(--bg);
       background-size: 22px 22px;
       color: var(--ink);
-      font-family: "Montserrat", "Segoe UI", Arial, sans-serif;
+      font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+    }}
+    body,
+    button,
+    textarea,
+    input,
+    select,
+    summary {{
+      font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif !important;
     }}
     .llm-page {{
       width: min(1180px, 100%);
@@ -1076,22 +1142,26 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     }}
     .llm-hero {{
       padding: clamp(22px, 5vw, 46px);
-      border: 3px solid var(--line);
-      border-radius: 28px;
-      background: var(--paper);
-      box-shadow: var(--shadow);
+      border: 8px dotted var(--line);
+      border-radius: 6px 38px 8px 42px;
+      background:
+        repeating-linear-gradient(135deg, #ff00ff 0 16px, #00ffff 16px 32px, #ffff00 32px 48px);
+      box-shadow: var(--shadow), -9px -7px 0 #39ff14;
       position: relative;
       overflow: hidden;
+      transform: rotate(-1.2deg);
     }}
     .llm-hero h1 {{
       margin: 0;
       max-width: 790px;
       font-size: clamp(34px, 8vw, 74px);
       line-height: .96;
-      letter-spacing: -.06em;
+      letter-spacing: .08em;
       text-transform: uppercase;
       position: relative;
       z-index: 1;
+      color: #39ff14;
+      text-shadow: 4px 4px 0 #000, 8px 8px 0 #ff3b00, -4px -4px 0 #001eff;
     }}
     .llm-hero-meta {{
       display: flex;
@@ -1108,8 +1178,8 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       padding: 9px 12px;
       border: 2px solid var(--line);
       border-radius: 999px;
-      background: #fff;
-      color: var(--ink);
+      background: #ff00ff;
+      color: #ffff00;
     }}
     .llm-kpis {{
       display: grid;
@@ -1121,15 +1191,16 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       min-height: 118px;
       padding: 18px;
       border: 3px solid var(--line);
-      border-radius: 22px;
-      background: #fff;
-      box-shadow: 4px 4px 0 var(--ink);
+      border-radius: 4px 28px 4px 28px;
+      background: #00ffea;
+      box-shadow: 7px 7px 0 #ff00ff;
+      transform: skew(-2deg);
     }}
-    .llm-kpi:nth-child(2) {{ background: var(--paper); }}
-    .llm-kpi:nth-child(3) {{ background: #fff; }}
-    .llm-kpi:nth-child(4) {{ background: #f7f5ff; }}
-    .llm-kpi:nth-child(5) {{ background: #fff1f0; }}
-    .llm-kpi:nth-child(5) strong {{ color: var(--red-brand); }}
+    .llm-kpi:nth-child(2) {{ background: #ffff00; }}
+    .llm-kpi:nth-child(3) {{ background: #ff00ff; color: #00ff00; }}
+    .llm-kpi:nth-child(4) {{ background: #00ff00; }}
+    .llm-kpi:nth-child(5) {{ background: #ff3b00; color: #001eff; }}
+    .llm-kpi:nth-child(5) strong {{ color: #ffff00; }}
     .llm-kpi strong {{
       display: block;
       font-size: clamp(28px, 5vw, 44px);
@@ -1152,9 +1223,9 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       margin: 34px 0 14px;
       padding: 9px 13px;
       border: 3px solid var(--line);
-      border-radius: 999px;
-      background: #fff;
-      box-shadow: 4px 4px 0 var(--ink);
+      border-radius: 0;
+      background: #39ff14;
+      box-shadow: 7px 7px 0 #ff00ff;
       font-size: 18px;
       letter-spacing: -.03em;
       text-transform: uppercase;
@@ -1174,12 +1245,13 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     }}
     .llm-person-card {{
       border: 3px solid var(--line);
-      border-radius: 24px;
-      background: #fff;
+      border-radius: 0 30px 0 30px;
+      background: #ffff00;
       padding: 18px;
-      box-shadow: 5px 5px 0 var(--ink);
+      box-shadow: 9px 6px 0 #ff00ff;
       position: relative;
       overflow: hidden;
+      transform: rotate(.5deg);
     }}
     .llm-person-card::before {{
       content: "";
@@ -1271,9 +1343,9 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     .llm-modal-actions button {{
       min-height: 44px;
       border: 3px solid var(--ink);
-      border-radius: 999px;
-      background: var(--purple);
-      color: #ffffff;
+      border-radius: 2px 18px 2px 18px;
+      background: #ff3b00;
+      color: #39ff14;
       padding: 10px 15px;
       font-weight: 800;
       cursor: pointer;
@@ -1282,7 +1354,8 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     }}
     .llm-card-actions button:hover,
     .llm-modal-actions button:hover {{
-      background: var(--violet);
+      background: #00ffff;
+      color: #ff00ff;
       transform: translate(-1px, -1px);
       box-shadow: 5px 5px 0 var(--ink);
     }}
@@ -1357,9 +1430,9 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     .llm-journal {{
       margin-top: 22px;
       border: 3px solid var(--line);
-      border-radius: 24px;
-      background: #fff;
-      box-shadow: 5px 5px 0 var(--ink);
+      border-radius: 0;
+      background: #ff00ff;
+      box-shadow: 10px 10px 0 #39ff14;
       overflow: hidden;
     }}
     .llm-journal-head {{
@@ -1369,7 +1442,7 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       gap: 12px;
       padding: 14px 16px;
       border-bottom: 2px solid var(--line);
-      background: var(--paper);
+      background: #00ffff;
     }}
     .llm-journal-head h2 {{
       margin: 0;
@@ -1438,10 +1511,10 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     .llm-matrix {{
       margin-top: 14px;
       border: 3px solid var(--line);
-      border-radius: 24px;
+      border-radius: 0;
       overflow: auto;
-      background: #fff;
-      box-shadow: 5px 5px 0 var(--ink);
+      background: #ccff00;
+      box-shadow: 12px 8px 0 #ff00ff;
     }}
     .llm-matrix table {{
       width: max-content;
@@ -1462,7 +1535,7 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       position: sticky;
       top: 0;
       z-index: 2;
-      background: var(--paper);
+      background: #ffff00;
       color: #424a57;
       font-size: 11px;
     }}
@@ -1481,10 +1554,10 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       gap: 16px;
       margin-top: 28px;
       border: 3px solid var(--ink);
-      border-radius: 28px;
-      background: var(--dark);
-      color: #fff;
-      box-shadow: 6px 6px 0 var(--ink);
+      border-radius: 2px 44px 2px 44px;
+      background: #001eff;
+      color: #39ff14;
+      box-shadow: 12px 12px 0 #ff00ff;
       overflow: hidden;
     }}
     .llm-neuro-copy {{
@@ -1558,10 +1631,10 @@ def render_director_progress_dashboard_html(data: dict) -> str:
     .llm-dialog {{
       width: min(560px, 100%);
       border: 3px solid var(--line);
-      border-radius: 24px;
-      background: #fff;
+      border-radius: 0;
+      background: #ffff00;
       padding: 18px;
-      box-shadow: 8px 8px 0 var(--ink);
+      box-shadow: 12px 12px 0 #ff00ff;
     }}
     .llm-dialog h2 {{ margin: 0; font-size: 22px; letter-spacing: -.04em; }}
     .llm-dialog p {{ color: var(--muted); font-size: 13px; line-height: 1.5; }}
@@ -1585,7 +1658,7 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       min-height: 140px;
       resize: vertical;
       border: 2px solid var(--line);
-      border-radius: 18px;
+      border-radius: 0;
       padding: 12px;
       font: inherit;
       font-size: 13px;
@@ -1606,8 +1679,8 @@ def render_director_progress_dashboard_html(data: dict) -> str:
       .llm-page {{ padding: 10px; }}
       .llm-hero, .llm-person-card, .llm-journal, .llm-matrix, .llm-neuro {{
         border-width: 2px;
-        border-radius: 22px;
-        box-shadow: 4px 4px 0 var(--ink);
+        border-radius: 0 24px 0 24px;
+        box-shadow: 7px 7px 0 #ff00ff;
       }}
       .llm-kpis {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
       .llm-cards {{ grid-template-columns: 1fr; gap: 10px; }}
@@ -1854,7 +1927,11 @@ async def director_reminder_test_handler(request: web.Request) -> web.Response:
         raise web.HTTPForbidden(text="Ссылка устарела. Открой кабинет из бота ещё раз.")
 
     settings = request.app["settings"]
-    data = build_mock_director_progress_data(settings, telegram_id)
+    source_data = await load_director_dashboard_data(telegram_id, settings.admin_ids)
+    if not source_data.get("allowed"):
+        raise web.HTTPForbidden(text="Тестовая отправка недоступна для этого пользователя")
+
+    data = build_real_director_progress_data(settings, source_data, telegram_id, settings.admin_ids)
     if data is None:
         raise web.HTTPForbidden(text="Тестовая отправка недоступна для этого пользователя")
 
@@ -1898,7 +1975,7 @@ async def director_reminder_test_handler(request: web.Request) -> web.Response:
             ]
         )
     )
-    recipient_ids = sorted(set(settings.admin_ids) | set(DIRECTOR_TEST_TEAMS.keys()))
+    recipient_ids = sorted(set(settings.admin_ids))
 
     sent_ids: list[int] = []
     failed: list[str] = []
@@ -1990,19 +2067,17 @@ async def director_dashboard_handler(request: web.Request) -> web.Response:
             charset="utf-8",
         )
 
-    mock_progress_data = build_mock_director_progress_data(settings, telegram_id)
-    if mock_progress_data is not None:
-        mock_progress_data["reminderLogs"] = await load_director_reminder_logs(telegram_id)
-        return web.Response(
-            body=render_director_progress_dashboard_html(mock_progress_data).encode("utf-8"),
-            content_type="text/html",
-            charset="utf-8",
-        )
-
     data = await load_director_dashboard_data(telegram_id, settings.admin_ids)
     if not data.get("allowed"):
         raise web.HTTPForbidden(text="Кабинет руководителя недоступен для этого пользователя")
-    data["reminderLogs"] = await load_director_reminder_logs(telegram_id)
+    progress_data = build_real_director_progress_data(settings, data, telegram_id, settings.admin_ids)
+    if progress_data is not None:
+        progress_data["reminderLogs"] = await load_director_reminder_logs(telegram_id)
+        return web.Response(
+            body=render_director_progress_dashboard_html(progress_data).encode("utf-8"),
+            content_type="text/html",
+            charset="utf-8",
+        )
 
     return web.Response(
         body=render_director_dashboard_html(data).encode("utf-8"),
