@@ -4,9 +4,8 @@ from app.notifications.constants import NOTIFICATION_TIME_OPTIONS
 
 
 MAIN_MENU_BUTTONS = [
-    [KeyboardButton(text="Задать вопрос"), KeyboardButton(text="Материалы программы")],
-    [KeyboardButton(text="Домашние задания"), KeyboardButton(text="Расписание Лиги Лидеров")],
-    [KeyboardButton(text="Настройки уведомлений")],
+    [KeyboardButton(text="Материалы программы"), KeyboardButton(text="Домашние задания")],
+    [KeyboardButton(text="Расписание Лиги Лидеров"), KeyboardButton(text="Настройки уведомлений")],
 ]
 
 PROJECT_CONTEXT_MENU_BUTTON = [KeyboardButton(text="Уточнить контекст моего проекта")]
@@ -113,7 +112,15 @@ ADMIN_TEXTS_BUTTONS = [
 
 ADMIN_MATERIAL_SEASON_BUTTONS = [
     [KeyboardButton(text="Материал: Сезон 1. Бизнес-консалтинг")],
+    [KeyboardButton(text="Материал: Сезон 2. Люди")],
     [KeyboardButton(text="Материал: без сезона")],
+    [KeyboardButton(text="Админ: меню")],
+]
+
+ADMIN_MEDIA_SEASON_BUTTONS = [
+    [KeyboardButton(text="Медиа: Сезон 1. Бизнес-консалтинг")],
+    [KeyboardButton(text="Медиа: Сезон 2. Люди")],
+    [KeyboardButton(text="Медиа: без сезона")],
     [KeyboardButton(text="Админ: меню")],
 ]
 
@@ -258,6 +265,7 @@ def all_reply_button_labels() -> set[str]:
         ADMIN_TECH_FILES_BUTTONS,
         ADMIN_TEXTS_BUTTONS,
         ADMIN_MATERIAL_SEASON_BUTTONS,
+        ADMIN_MEDIA_SEASON_BUTTONS,
         ADMIN_MATERIAL_MODULE_BUTTONS,
         ADMIN_MATERIAL_TYPE_BUTTONS,
         ADMIN_LESSON_DATE_BUTTONS,
@@ -280,6 +288,10 @@ def admin_texts_keyboard() -> ReplyKeyboardMarkup:
 
 def admin_material_season_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=ADMIN_MATERIAL_SEASON_BUTTONS, resize_keyboard=True)
+
+
+def admin_media_season_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=ADMIN_MEDIA_SEASON_BUTTONS, resize_keyboard=True)
 
 
 def admin_material_module_keyboard() -> ReplyKeyboardMarkup:

@@ -40,6 +40,7 @@ from app.bot.keyboards.reply import (
     admin_homework_link_keyboard,
     admin_lesson_date_keyboard,
     admin_media_module_keyboard,
+    admin_media_season_keyboard,
     admin_media_type_keyboard,
     admin_menu_keyboard,
     admin_notification_control_keyboard,
@@ -121,7 +122,11 @@ from app.notifications.constants import (
     NOTIFICATION_TIME_OPTIONS,
 )
 from app.services.container import AppContainer
-from app.services.director_dashboard import is_director_dashboard_demo_user
+from app.services.conversation_context import (
+    has_fresh_active_lesson_context,
+    is_contextual_lesson_followup,
+)
+from app.services.director_dashboard import DIRECTOR_DISPLAY_NAMES
 from app.services.document_service import FileValidationError, SavedUpload
 from app.services.question_routing import route_direct_question
 from app.services.video_links import build_director_dashboard_url, build_video_watch_url
@@ -266,8 +271,6 @@ def build_main_router(container: AppContainer) -> Router:
         if telegram_id is None:
             return False
         if telegram_id in container.settings.admin_ids:
-            return True
-        if is_director_dashboard_demo_user(telegram_id):
             return True
         try:
             async with SessionLocal() as session:
@@ -475,48 +478,43 @@ def build_main_router(container: AppContainer) -> Router:
 
     def looks_like_technical_question(text_value: str | None) -> bool:
         text = (text_value or "").lower()
-        direct_markers = [
-            "не могу зайти",
-            "не получается зайти",
-            "не зайти",
+        access_markers = ["логин", "пароль", "доступ"]
+        if any(marker in text for marker in access_markers):
+            return True
+        problem_markers = [
+            "не могу",
+            "не получается",
             "не открывается",
             "не открыва",
             "ошибка",
-            "логин",
-            "пароль",
-            "доступ",
-            "платформ",
-            "прогресс",
-            "запис",
-            "видео",
-            "ссылка",
-            "прикреп",
-            "прилож",
+            "не работает",
+            "не грузит",
+            "не загружа",
+            "не отправля",
         ]
-        if any(marker in text for marker in direct_markers):
+        technical_subjects = ["платформ", "прогресс", "запис", "видео", "ссылк", "файл", "прикреп", "прилож"]
+        if any(marker in text for marker in problem_markers) and any(marker in text for marker in technical_subjects):
             return True
         homework_action = any(marker in text for marker in ["сдать", "отправить", "загрузить", "прикрепить", "приложить"])
         return homework_action and any(marker in text for marker in ["дз", "домаш", "задани"])
 
     def looks_like_schedule_question(text_value: str | None) -> bool:
         text = (text_value or "").lower()
-        return any(
-            marker in text
-            for marker in [
-                "распис",
-                "когда",
-                "какого числа",
-                "дата",
-                "занят",
-                "урок",
-                "блок",
-                "спикер",
-                "семенов",
-                "рахманов",
-                "макарова",
-                "сафронов",
-            ]
-        )
+        schedule_markers = [
+            "распис",
+            "когда",
+            "какого числа",
+            "дата",
+            "во сколько",
+            "календар",
+            "следующ",
+            "ближайш",
+            "предстоящ",
+        ]
+        if any(marker in text for marker in schedule_markers):
+            return True
+        lesson_markers = ["занят", "урок", "встреч", "блок"]
+        return "спикер" in text and any(marker in text for marker in lesson_markers)
 
     def should_send_schedule_image_for_question(text_value: str | None) -> bool:
         text = (text_value or "").lower()
@@ -681,28 +679,41 @@ def build_main_router(container: AppContainer) -> Router:
             return None
         return str(target_path)
 
-    def lesson_payload(prefix: str, season_title: str | None, text_value: str) -> dict[str, Any]:
+    def lesson_payload(prefix: str, season_title: str | None, text_value: str, season_key: str | None = None) -> dict[str, Any]:
         text = text_value.lower()
         if "общий" in text or "без модуля" in text:
             module_title = f"{season_title}, общий материал" if season_title else "Общий материал программы"
             return {
                 f"{prefix}_module_number": None,
                 f"{prefix}_module_title": module_title,
-                f"{prefix}_lesson_key": "general",
+                f"{prefix}_lesson_key": f"{season_key}_general" if season_key else "general",
             }
 
         module_match = re.search(r"(?:модуль|урок)\s+(\d+)", text_value, flags=re.IGNORECASE)
         module_number = int(module_match.group(1)) if module_match else None
         module_title = None
-        lesson_key = "general"
+        lesson_key = f"{season_key}_general" if season_key else "general"
         if module_number:
             module_title = f"{season_title}, урок/модуль {module_number}" if season_title else f"Урок/модуль {module_number}"
-            lesson_key = f"lesson_{module_number}"
+            lesson_key = f"{season_key}_placeholder_l{module_number}" if season_key else f"lesson_{module_number}"
         return {
             f"{prefix}_module_number": module_number,
             f"{prefix}_module_title": module_title,
             f"{prefix}_lesson_key": lesson_key,
         }
+
+    ADMIN_SEASON_BY_BUTTON = {
+        "Сезон 1. Бизнес-консалтинг": ("s1", "Бизнес"),
+        "Сезон 2. Люди": ("s2", "Люди"),
+    }
+
+    def parse_admin_scoped_season_button(text_value: str | None, prefix: str) -> tuple[str | None, str | None] | None:
+        if not text_value:
+            return None
+        label = text_value.removeprefix(f"{prefix}: ").strip()
+        if label == "без сезона":
+            return (None, None)
+        return ADMIN_SEASON_BY_BUTTON.get(label)
 
     MONTHS_RU = {
         "января": 1,
@@ -1166,7 +1177,13 @@ def build_main_router(container: AppContainer) -> Router:
             ttl_hours=container.settings.video_link_ttl_hours,
         )
 
-    async def send_materials_lesson_card(message: Message, lesson, telegram_user=None) -> None:
+    async def send_materials_lesson_card(
+        message: Message,
+        lesson,
+        telegram_user=None,
+        state: FSMContext | None = None,
+    ) -> None:
+        await remember_lesson_context(state, lesson)
         user, session = await get_user_and_session(message, telegram_user=telegram_user)
         await session.close()
 
@@ -1266,6 +1283,67 @@ def build_main_router(container: AppContainer) -> Router:
             return
         title = "Выбери подкаст:" if media_type == "podcast" else "Выбери видео:"
         await message.answer(title, reply_markup=media_list_keyboard(selected_items, media_type=media_type))
+
+    async def remember_lesson_context(state: FSMContext | None, lesson) -> None:
+        if state is None or lesson is None:
+            return
+        await state.update_data(
+            last_lesson_key=lesson.lesson_key,
+            last_lesson_date=lesson.date_start.isoformat() if lesson.date_start else None,
+            last_lesson_title=lesson.lesson_title,
+            last_lesson_module_number=lesson.lesson_number,
+            last_lesson_context_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    async def clear_flow_keep_dialog_context(state: FSMContext) -> None:
+        data = await state.get_data()
+        context_keys = (
+            "last_lesson_key",
+            "last_lesson_date",
+            "last_lesson_title",
+            "last_lesson_module_number",
+            "last_lesson_context_at",
+            "last_question",
+            "last_answer",
+        )
+        preserved_context = {
+            key: data[key]
+            for key in context_keys
+            if data.get(key) is not None
+        }
+        await state.clear()
+        if preserved_context:
+            await state.update_data(**preserved_context)
+
+    async def recent_lesson_scope_for_question(
+        state: FSMContext,
+        question: str,
+    ) -> tuple[str | None, date | None] | None:
+        """Reuse only a fresh, explicitly referenced lesson from this bot session."""
+        if (
+            looks_like_schedule_question(question)
+            or looks_like_technical_question(question)
+            or not is_contextual_lesson_followup(question)
+        ):
+            return None
+
+        data = await state.get_data()
+        if not has_fresh_active_lesson_context(data):
+            return None
+
+        lesson_key = data.get("last_lesson_key")
+        lesson_date_raw = data.get("last_lesson_date")
+        lesson_date = None
+        if isinstance(lesson_date_raw, str) and lesson_date_raw:
+            try:
+                lesson_date = date.fromisoformat(lesson_date_raw)
+            except ValueError:
+                lesson_date = None
+        if not isinstance(lesson_key, str) or not lesson_key:
+            lesson_key = None
+        if lesson_key is None and lesson_date is None:
+            return None
+        return lesson_key, lesson_date
 
     async def send_materials_block_picker(message: Message) -> None:
         async with SessionLocal() as session:
@@ -1401,9 +1479,9 @@ def build_main_router(container: AppContainer) -> Router:
         ("s1_b3_l2", ["сценарное планирование", "сценарн", "ярослав павлов", "павлов"]),
         ("s1_b3_l3", ["разработка стратегии", "компании дар", "дар", "елена лашманова", "лашманова"]),
         ("s1_b3_l4", ["управленческий совет", "защита стратегических проектов", "стратегические проекты"]),
-        ("s1_b4_l1", ["экономика и финансы", "введение", "карлик", "м.а. карлик", "дз и кз", "дебитор", "кредитор"]),
-        ("s1_b4_l2", ["как заработать прибыль", "прибыль", "золотая формула бизнеса", "сафронов", "учетная политика", "учётная политика", "факторный анализ"]),
-        ("s1_b4_l3", ["отчеты и показатели", "отчёты и показатели", "эиф", "p&l", "pl", "cf", "макарова", "kpi"]),
+        ("s1_b4_l1", ["экономика и финансы. введение", "экономика и финансы введение", "карлик", "м.а. карлик", "дз и кз", "дебитор", "кредитор"]),
+        ("s1_b4_l2", ["как заработать прибыль", "прибыль", "золотая формула бизнеса", "учетная политика", "учётная политика", "факторный анализ"]),
+        ("s1_b4_l3", ["отчеты и показатели", "отчёты и показатели", "отчеты и показатели эиф", "отчёты и показатели эиф", "p&l", "pl", "cf", "kpi"]),
         ("s1_b4_l4", ["групповая работа по итогам блока", "итоги блока эиф", "итогам блока эиф", "онлайн работа", "обратная связь по финансам"]),
         ("s1_b5_final", ["очная сессия", "подведение итогов", "спб"]),
     ]
@@ -1413,6 +1491,156 @@ def build_main_router(container: AppContainer) -> Router:
             if any(marker in text for marker in markers):
                 return candidate_key
         return None
+
+    def block_key_from_text(text: str) -> str | None:
+        if "бизнес" in text or "консалт" in text:
+            return "s1_b2"
+        if "стратег" in text:
+            return "s1_b3"
+        if "эконом" in text or "финанс" in text or "эиф" in text:
+            return "s1_b4"
+        return None
+
+    def lesson_number_from_text(text: str) -> int | None:
+        lesson_word = r"(?:урок\w*|модул\w*|заняти\w*|встреч\w*)"
+        module_match = re.search(rf"{lesson_word}\s*(?:№|номер)?\s*(\d+)", text, flags=re.IGNORECASE)
+        if not module_match:
+            module_match = re.search(rf"\b(\d+)\s*{lesson_word}\b", text, flags=re.IGNORECASE)
+        if module_match:
+            return int(module_match.group(1))
+
+        ordinal_markers = [
+            (1, ["перв", "1-й", "1ый"]),
+            (2, ["втор", "2-й", "2ой"]),
+            (3, ["трет", "треть", "3-й", "3ий"]),
+            (4, ["четвер", "4-й", "4ый"]),
+            (5, ["пят", "5-й", "5ый"]),
+        ]
+        if any(marker in text for marker in ["урок", "модул", "заняти", "встреч"]):
+            for number, markers in ordinal_markers:
+                if any(marker in text for marker in markers):
+                    return number
+        return None
+
+    def select_single_lesson_from_candidates(text: str, lessons: list[Any]):
+        lesson_date = None
+        try:
+            lesson_date = parse_lesson_date_input(text)
+        except ValueError:
+            lesson_date = None
+        if lesson_date is not None:
+            dated = [
+                lesson
+                for lesson in lessons
+                if lesson.date_start == lesson_date or lesson.date_end == lesson_date
+            ]
+            if len(dated) == 1:
+                return dated[0]
+
+        direct_lesson_key = direct_lesson_key_from_text(text)
+        if direct_lesson_key:
+            keyed = [lesson for lesson in lessons if lesson.lesson_key == direct_lesson_key]
+            if len(keyed) == 1:
+                return keyed[0]
+
+        normalized_text = text.replace("ё", "е")
+        title_matches = []
+        for lesson in lessons:
+            lesson_title = (lesson.lesson_title or "").lower().replace("ё", "е").strip()
+            title_without_number = re.sub(r"^занятие\s*\d+\.\s*", "", lesson_title).strip()
+            if lesson_title and lesson_title in normalized_text:
+                title_matches.append(lesson)
+            elif title_without_number and len(title_without_number) > 12 and title_without_number in normalized_text:
+                title_matches.append(lesson)
+        if len(title_matches) == 1:
+            return title_matches[0]
+
+        block_key = block_key_from_text(text)
+        lesson_number = lesson_number_from_text(text)
+        if block_key and lesson_number:
+            scoped = [
+                lesson
+                for lesson in lessons
+                if lesson.block_key == block_key and lesson.lesson_number == lesson_number
+            ]
+            if len(scoped) == 1:
+                return scoped[0]
+
+        if lesson_number:
+            numbered = [lesson for lesson in lessons if lesson.lesson_number == lesson_number]
+            if len(numbered) == 1:
+                return numbered[0]
+
+        return None
+
+    def has_current_lesson_reference(text: str) -> bool:
+        return any(
+            marker in text
+            for marker in [
+                "этого занят",
+                "этом занят",
+                "это занят",
+                "этой встреч",
+                "этого урок",
+                "этом урок",
+                "по нему",
+                "по ней",
+                "по этому",
+                "по этой",
+                "оттуда",
+                "его запись",
+                "ее запись",
+                "её запись",
+            ]
+        )
+
+    def has_global_material_scope(text: str) -> bool:
+        return any(
+            marker in text
+            for marker in [
+                "все ",
+                "всё ",
+                "всех ",
+                "по всем",
+                "список",
+                "архив",
+                "все саммари",
+                "все записи",
+                "все видео",
+                "все материалы",
+                "всё саммари",
+                "всё видео",
+                "всё материалы",
+            ]
+        )
+
+    def should_use_last_lesson_for_material_lookup(text: str) -> bool:
+        if has_global_material_scope(text):
+            return False
+        if has_current_lesson_reference(text):
+            return True
+        short_contextual_markers = [
+            "дай",
+            "пришли",
+            "скинь",
+            "покажи",
+            "открой",
+            "только",
+            "еще",
+            "ещё",
+            "и саммари",
+            "и видео",
+            "и запись",
+            "саммари",
+            "видео",
+            "запись",
+            "подкаст",
+            "материал",
+            "презентац",
+            "дз",
+            "домаш",
+        ]
+        return any(marker in text for marker in short_contextual_markers)
 
     def extract_material_lookup(text_value: str | None) -> dict[str, Any] | None:
         text = (text_value or "").strip().lower()
@@ -1442,8 +1670,20 @@ def build_main_router(container: AppContainer) -> Router:
             content_type = "homework"
         else:
             content_type = "materials"
+        content_types = []
+        if wants_summary:
+            content_types.append("summary")
+        if wants_video:
+            content_types.append("video")
+        if wants_podcast:
+            content_types.append("podcast")
+        if wants_homework:
+            content_types.append("homework")
+        if wants_docs:
+            content_types.append("materials")
         if wants_lesson_card_lookup(text, content_type):
             content_type = "lesson_card"
+            content_types = ["lesson_card"]
 
         lesson_date = None
         try:
@@ -1459,32 +1699,8 @@ def build_main_router(container: AppContainer) -> Router:
         )
         lesson_key = direct_lesson_key_from_text(text)
 
-        block_key = None
-        if "бизнес" in text or "консалт" in text:
-            block_key = "s1_b2"
-        elif "стратег" in text:
-            block_key = "s1_b3"
-        elif "эконом" in text or "финанс" in text:
-            block_key = "s1_b4"
-
-        module_match = re.search(r"(?:урок|модуль|занятие)\s*(?:№|номер)?\s*(\d+)", text, flags=re.IGNORECASE)
-        if not module_match:
-            module_match = re.search(r"\b(\d+)\s*(?:урок|модуль|занятие)\b", text, flags=re.IGNORECASE)
-        if module_match:
-            module_number = int(module_match.group(1))
-        else:
-            ordinal_markers = [
-                (1, ["перв", "1-й", "1ый"]),
-                (2, ["втор", "2-й", "2ой"]),
-                (3, ["трет", "треть", "3-й", "3ий"]),
-                (4, ["четвер", "4-й", "4ый"]),
-                (5, ["пят", "5-й", "5ый"]),
-            ]
-            if any(marker in text for marker in ["урок", "модул", "заняти", "встреч"]):
-                for number, markers in ordinal_markers:
-                    if any(marker in text for marker in markers):
-                        module_number = number
-                        break
+        block_key = block_key_from_text(text)
+        module_number = lesson_number_from_text(text)
 
         if module_number and lesson_key is None:
             if block_key:
@@ -1495,8 +1711,11 @@ def build_main_router(container: AppContainer) -> Router:
                     "lesson_date": lesson_date,
                     "module_number": module_number,
                     "content_type": content_type,
+                    "content_types": content_types,
                     "latest_with_content": wants_latest_with_content,
                     "ambiguous_module_number": True,
+                    "use_last_lesson": has_current_lesson_reference(text),
+                    "query_text": text,
                 }
 
         if (
@@ -1514,7 +1733,10 @@ def build_main_router(container: AppContainer) -> Router:
             "module_number": module_number,
             "block_key": block_key,
             "content_type": content_type,
+            "content_types": content_types,
             "latest_with_content": wants_latest_with_content,
+            "use_last_lesson": has_current_lesson_reference(text),
+            "query_text": text,
         }
 
     def build_content_tags(
@@ -1621,7 +1843,7 @@ def build_main_router(container: AppContainer) -> Router:
         lesson_date: date | None = None,
         document_ids: list[int] | None = None,
         telegram_user=None,
-        show_followup_menu: bool = True,
+        show_followup_menu: bool = False,
     ) -> None:
         user, session = await get_user_and_session(message, telegram_user=telegram_user)
         user_id = user.id
@@ -1631,6 +1853,17 @@ def build_main_router(container: AppContainer) -> Router:
             if rate_count >= container.settings.max_user_questions_per_minute:
                 await message.answer("Слишком много запросов за минуту. Попробуй чуть позже.")
                 return
+
+            if (
+                force_rag
+                and lesson_key is None
+                and lesson_date is None
+                and not document_ids
+                and mode in {"training_qa", "program_question", "other_question", "followup", "free_text", "voice_question"}
+            ):
+                recent_scope = await recent_lesson_scope_for_question(state, question)
+                if recent_scope is not None:
+                    lesson_key, lesson_date = recent_scope
 
             thinking_message = await message.answer(random.choice(THINKING_MESSAGES))
             result = await container.chat_service.answer_question(
@@ -1650,7 +1883,16 @@ def build_main_router(container: AppContainer) -> Router:
                     "Если хочешь продолжить, выбери действие:",
                     reply_markup=await user_main_menu_for_message(message, telegram_user=telegram_user),
                 )
-            await state.update_data(last_question=question, last_answer=result.text)
+            state_update = {"last_question": question, "last_answer": result.text}
+            if lesson_key or lesson_date:
+                state_update.update(
+                    {
+                        "last_lesson_key": lesson_key,
+                        "last_lesson_date": lesson_date.isoformat() if lesson_date else None,
+                        "last_lesson_context_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+            await state.update_data(**state_update)
         except Exception as exc:
             logger.exception("answer_question_failed")
             await session.rollback()
@@ -1789,10 +2031,54 @@ def build_main_router(container: AppContainer) -> Router:
         )
         await message.answer("\n".join(lines), reply_markup=document_list_keyboard(docs))
 
-    async def send_materials_by_lookup(message: Message, lookup: dict[str, Any], telegram_user=None) -> bool:
+    async def send_materials_by_lookup(
+        message: Message,
+        lookup: dict[str, Any],
+        telegram_user=None,
+        state: FSMContext | None = None,
+    ) -> bool:
         user, session = await get_user_and_session(message, telegram_user=telegram_user)
         try:
             lookup = dict(lookup)
+            query_text = str(lookup.get("query_text") or "").lower()
+            if (
+                state is not None
+                and not lookup.get("use_last_lesson")
+                and not lookup.get("lesson_key")
+                and not lookup.get("lesson_date")
+                and not lookup.get("latest_with_content")
+                and not lookup.get("block_key")
+                and should_use_last_lesson_for_material_lookup(query_text)
+            ):
+                state_data = await state.get_data()
+                if has_fresh_active_lesson_context(state_data):
+                    lookup["use_last_lesson"] = True
+
+            if lookup.get("use_last_lesson") and not lookup.get("lesson_key") and not lookup.get("lesson_date"):
+                state_data = await state.get_data() if state is not None else {}
+                if not has_fresh_active_lesson_context(state_data):
+                    state_data = {}
+                last_lesson_key = state_data.get("last_lesson_key")
+                last_lesson_date_raw = state_data.get("last_lesson_date")
+                if last_lesson_key:
+                    lookup["lesson_key"] = last_lesson_key
+                if last_lesson_date_raw:
+                    try:
+                        lookup["lesson_date"] = date.fromisoformat(last_lesson_date_raw)
+                    except (TypeError, ValueError):
+                        lookup["lesson_date"] = None
+                if state_data.get("last_lesson_module_number"):
+                    lookup["module_number"] = state_data.get("last_lesson_module_number")
+                if state_data.get("last_lesson_title"):
+                    lookup["label"] = state_data.get("last_lesson_title")
+                if not lookup.get("lesson_key") and not lookup.get("lesson_date"):
+                    await message.answer(
+                        "Не понял, про какое занятие речь. Напиши, например: «дай видео занятия 4 ЭиФ» "
+                        "или сначала открой карточку нужного занятия.",
+                        reply_markup=materials_program_keyboard(),
+                        parse_mode=None,
+                    )
+                    return True
             if lookup.get("ambiguous_module_number"):
                 module_number = lookup.get("module_number")
                 await message.answer(
@@ -1822,7 +2108,18 @@ def build_main_router(container: AppContainer) -> Router:
                 )
 
             content_type = lookup.get("content_type") or "materials"
+            content_types = [item for item in (lookup.get("content_types") or [content_type]) if item]
+            content_types = list(dict.fromkeys(content_types))
             has_lesson_scope = bool(lookup.get("lesson_key") or lookup.get("lesson_date"))
+
+            if has_lesson_scope and state is not None:
+                lesson_for_context = None
+                if lookup.get("lesson_key"):
+                    lesson_for_context = await ProgramLessonRepository.get_by_key(session, lookup["lesson_key"])
+                elif lookup.get("lesson_date"):
+                    lesson_for_context = await ProgramLessonRepository.get_by_date(session, lookup["lesson_date"])
+                if lesson_for_context is not None:
+                    await remember_lesson_context(state, lesson_for_context)
 
             if not has_lesson_scope and lookup.get("block_key"):
                 lessons = await ProgramLessonRepository.list_by_block(session, lookup["block_key"])
@@ -1851,7 +2148,7 @@ def build_main_router(container: AppContainer) -> Router:
                         reply_markup=materials_program_keyboard(),
                     )
                     return True
-                await send_materials_lesson_card(message, lesson, telegram_user=telegram_user)
+                await send_materials_lesson_card(message, lesson, telegram_user=telegram_user, state=state)
                 return True
 
             if has_lesson_scope:
@@ -1878,16 +2175,18 @@ def build_main_router(container: AppContainer) -> Router:
                 docs = []
                 media_items = []
                 homeworks = []
-                if content_type == "summary":
+                if "summary" in content_types:
                     docs = await DocumentRepository.list_visible_by_material_type(
                         session=session,
                         user_id=user.id,
                         material_type="summary",
                         limit=20,
                     )
-                elif content_type in {"podcast", "video"}:
-                    media_items = await ProgramMediaRepository.list_by_type(session, media_type=content_type, limit=20)
-                elif content_type == "homework":
+                if "video" in content_types:
+                    media_items.extend(await ProgramMediaRepository.list_by_type(session, media_type="video", limit=20))
+                if "podcast" in content_types:
+                    media_items.extend(await ProgramMediaRepository.list_by_type(session, media_type="podcast", limit=20))
+                if "homework" in content_types:
                     homeworks = await HomeworkRepository.list_active(session, limit=20)
         finally:
             await session.close()
@@ -1900,6 +2199,77 @@ def build_main_router(container: AppContainer) -> Router:
         if lookup.get("lesson_date"):
             lookup_parts.append(f"дата {format_lesson_date(lookup['lesson_date'])}")
         lookup_text = ", ".join(lookup_parts) or "указанный раздел"
+
+        if len(content_types) > 1:
+            sent_anything = False
+            if "summary" in content_types:
+                summaries = summary_docs_for_lesson(docs) if has_lesson_scope else docs
+                await send_summary_documents(
+                    message,
+                    summaries[:20],
+                    empty_text=f"Саммари по запросу «{lookup_text}» пока не добавлено.",
+                )
+                sent_anything = sent_anything or bool(summaries)
+
+            for requested_media_type in ["video", "podcast"]:
+                if requested_media_type not in content_types:
+                    continue
+                selected_media = [
+                    media for media in media_items if media.media_type == requested_media_type
+                ]
+                if not selected_media:
+                    label = "Подкасты" if requested_media_type == "podcast" else "Видео"
+                    await message.answer(f"{label} по запросу «{lookup_text}» пока не добавлены.", reply_markup=materials_program_keyboard())
+                    continue
+                if requested_media_type == "video" and len(selected_media) == 1:
+                    await send_media_asset(message, selected_media[0])
+                else:
+                    title = "Выбери подкаст:" if requested_media_type == "podcast" else "Выбери видео:"
+                    await message.answer(title, reply_markup=media_list_keyboard(selected_media, media_type=requested_media_type))
+                sent_anything = True
+
+            if "materials" in content_types:
+                material_docs = material_docs_for_lesson(docs)
+                if material_docs:
+                    lines = [
+                        f"Нашёл материалы и презентации: {lookup_text}.",
+                        "",
+                    ]
+                    for doc in material_docs[:20]:
+                        date_hint = format_lesson_date(doc.lesson_date)
+                        date_suffix = f" ({date_hint})" if date_hint != "без даты" else ""
+                        lines.append(f"- {doc.title}{date_suffix}")
+                    lines.extend(["", "Нажми на материал ниже, чтобы скачать оригинал."])
+                    await message.answer("\n".join(lines), reply_markup=document_list_keyboard(material_docs))
+                    sent_anything = True
+                else:
+                    await message.answer(f"Материалы и презентации по запросу «{lookup_text}» пока не добавлены.", reply_markup=materials_program_keyboard())
+
+            if "homework" in content_types:
+                archived_count = len(archived_homeworks(homeworks))
+                actual_homeworks = current_homeworks(homeworks)
+                if actual_homeworks:
+                    lines = [f"Нашёл домашние задания: {lookup_text}.", ""]
+                    for homework in actual_homeworks[:20]:
+                        deadline_text = f"; срок сдачи: {homework_deadline_label(homework)}" if homework.deadline_date else ""
+                        lines.append(f"- {homework.title} ({homework_lesson_label(homework)}{deadline_text})")
+                    lines.extend(["", "Выбери нужное задание кнопкой ниже."])
+                    await message.answer(
+                        "\n".join(lines),
+                        reply_markup=homework_list_keyboard(actual_homeworks, include_archive=bool(archived_count)),
+                        parse_mode=None,
+                    )
+                    sent_anything = True
+                else:
+                    archive_hint = " Старые задания можно посмотреть через «Домашние задания» -> «Архив ДЗ»." if archived_count else ""
+                    await message.answer(f"Актуальные домашние задания по запросу «{lookup_text}» пока не добавлены.{archive_hint}", reply_markup=homework_program_keyboard())
+
+            if not sent_anything:
+                await message.answer(
+                    f"По запросу «{lookup_text}» пока ничего не нашёл.",
+                    reply_markup=await user_main_menu_for_message(message, telegram_user=telegram_user),
+                )
+            return True
 
         if content_type == "summary":
             summaries = summary_docs_for_lesson(docs) if has_lesson_scope else docs
@@ -1915,6 +2285,9 @@ def build_main_router(container: AppContainer) -> Router:
             if not selected_media:
                 label = "Подкасты" if content_type == "podcast" else "Видео"
                 await message.answer(f"{label} по запросу «{lookup_text}» пока не добавлены.", reply_markup=materials_program_keyboard())
+                return True
+            if content_type == "video" and len(selected_media) == 1:
+                await send_media_asset(message, selected_media[0])
                 return True
             title = "Выбери подкаст:" if content_type == "podcast" else "Выбери видео:"
             await message.answer(title, reply_markup=media_list_keyboard(selected_media, media_type=content_type))
@@ -2024,7 +2397,31 @@ def build_main_router(container: AppContainer) -> Router:
 
     def wants_lesson_overview(text_value: str | None) -> bool:
         text = (text_value or "").lower()
-        return any(marker in text for marker in ["что было", "расскажи", "расскажите", "о чем", "про что", "что обсуждали", "что проходили"])
+        return any(
+            marker in text
+            for marker in [
+                "что было",
+                "расскажи",
+                "расскажите",
+                "о чем",
+                "про что",
+                "что обсуждали",
+                "что обсуждалось",
+                "что проходили",
+                "что говорил",
+                "что говорила",
+                "что говорили",
+                "что сказал",
+                "что сказала",
+                "что рассказывал",
+                "что рассказывала",
+                "что рассказывали",
+                "цитата",
+                "цитаты",
+                "тезисы",
+                "тезисно",
+            ]
+        )
 
     def wants_lesson_card_request(text_value: str | None) -> bool:
         text = (text_value or "").lower()
@@ -2037,6 +2434,9 @@ def build_main_router(container: AppContainer) -> Router:
     async def select_relative_lesson(direction: str, offset: int):
         async with SessionLocal() as session:
             lessons = await ProgramLessonRepository.list_active(session)
+        return select_relative_lesson_from_list(lessons, direction, offset)
+
+    def select_relative_lesson_from_list(lessons: list[Any], direction: str, offset: int):
         today = date.today()
         if direction == "future":
             candidates = [
@@ -2059,6 +2459,19 @@ def build_main_router(container: AppContainer) -> Router:
         question_text: str | None = None,
         telegram_user=None,
     ) -> None:
+        if state is not None and question_text:
+            await remember_lesson_context(state, lesson)
+            await answer_question(
+                message,
+                question_text,
+                state,
+                mode="lesson_overview",
+                lesson_key=lesson.lesson_key,
+                lesson_date=lesson.date_start,
+                telegram_user=telegram_user,
+            )
+            return
+
         user, session = await get_user_and_session(message, telegram_user=telegram_user)
         try:
             docs = await DocumentRepository.list_visible_by_lesson(
@@ -2073,26 +2486,13 @@ def build_main_router(container: AppContainer) -> Router:
         summaries = summary_docs_for_lesson(docs)
         if summaries:
             await send_summary_documents(message, summaries[:5])
-            await send_materials_lesson_card(message, lesson, telegram_user=telegram_user)
-            return
-        if state is not None and question_text:
-            await answer_question(
-                message,
-                question_text,
-                state,
-                mode="lesson_overview",
-                lesson_key=lesson.lesson_key,
-                lesson_date=lesson.date_start,
-                telegram_user=telegram_user,
-                show_followup_menu=False,
-            )
-            await send_materials_lesson_card(message, lesson, telegram_user=telegram_user)
+            await send_materials_lesson_card(message, lesson, telegram_user=telegram_user, state=state)
             return
         await message.answer(
             "Саммари по этому занятию пока не добавлено. Показываю карточку занятия с доступными материалами.",
             parse_mode=None,
         )
-        await send_materials_lesson_card(message, lesson, telegram_user=telegram_user)
+        await send_materials_lesson_card(message, lesson, telegram_user=telegram_user, state=state)
 
     async def answer_structured_lesson_question_if_supported(
         message: Message,
@@ -2102,6 +2502,53 @@ def build_main_router(container: AppContainer) -> Router:
     ) -> bool:
         text = (text_value or "").lower()
         relative_lookup = relative_lesson_lookup(text)
+        speaker_marker = extract_speaker_marker(text)
+        if speaker_marker and relative_lookup is not None and (has_lesson_context_words(text) or wants_lesson_overview(text)):
+            direction, offset = relative_lookup
+            async with SessionLocal() as session:
+                lessons = await ProgramLessonRepository.list_active(session)
+            speaker_lessons = [
+                lesson
+                for lesson in lessons
+                if speaker_marker in (lesson.speaker or "").lower().replace("ё", "е")
+            ]
+            lesson = select_relative_lesson_from_list(speaker_lessons, direction, offset)
+            if lesson is not None:
+                if has_homework_lookup_intent(text) or "дз" in text or "домаш" in text:
+                    await send_materials_by_lookup(
+                        message,
+                        {
+                            "lesson_key": lesson.lesson_key,
+                            "lesson_date": lesson.date_start,
+                            "module_number": lesson.lesson_number,
+                            "content_type": "homework",
+                            "label": lesson.lesson_title,
+                        },
+                        telegram_user=telegram_user,
+                        state=state,
+                    )
+                    return True
+                if wants_lesson_date(text):
+                    await remember_lesson_context(state, lesson)
+                    await message.answer(format_lesson_card(lesson), reply_markup=schedule_lesson_keyboard(lesson), parse_mode=None)
+                    if should_send_schedule_image_for_question(text):
+                        await send_schedule_image(message)
+                    return True
+                if wants_lesson_card_request(text):
+                    await send_materials_lesson_card(message, lesson, telegram_user=telegram_user, state=state)
+                    return True
+                if wants_lesson_overview(text):
+                    await send_lesson_overview(
+                        message,
+                        lesson,
+                        state=state,
+                        question_text=text_value,
+                        telegram_user=telegram_user,
+                    )
+                    return True
+                await send_materials_lesson_card(message, lesson, telegram_user=telegram_user, state=state)
+                return True
+
         if relative_lookup is not None:
             direction, offset = relative_lookup
             lesson = await select_relative_lesson(direction, offset)
@@ -2122,15 +2569,17 @@ def build_main_router(container: AppContainer) -> Router:
                         "label": lesson.lesson_title,
                     },
                     telegram_user=telegram_user,
+                    state=state,
                 )
                 return True
             if wants_lesson_date(text):
+                await remember_lesson_context(state, lesson)
                 await message.answer(format_lesson_card(lesson), reply_markup=schedule_lesson_keyboard(lesson), parse_mode=None)
                 if should_send_schedule_image_for_question(text):
                     await send_schedule_image(message)
                 return True
             if wants_lesson_card_request(text):
-                await send_materials_lesson_card(message, lesson, telegram_user=telegram_user)
+                await send_materials_lesson_card(message, lesson, telegram_user=telegram_user, state=state)
                 return True
             if wants_lesson_overview(text):
                 await send_lesson_overview(
@@ -2141,14 +2590,45 @@ def build_main_router(container: AppContainer) -> Router:
                     telegram_user=telegram_user,
                 )
                 return True
-            await send_materials_lesson_card(message, lesson, telegram_user=telegram_user)
+            await send_materials_lesson_card(message, lesson, telegram_user=telegram_user, state=state)
             return True
 
         direct_lesson_key = direct_lesson_key_from_text(text)
-        if direct_lesson_key and has_lesson_context_words(text) and wants_lesson_overview(text):
+        if direct_lesson_key and (
+            has_lesson_context_words(text)
+            or wants_lesson_overview(text)
+            or wants_lesson_card_request(text)
+            or wants_lesson_date(text)
+        ):
             async with SessionLocal() as session:
                 lesson = await ProgramLessonRepository.get_by_key(session, direct_lesson_key)
             if lesson is not None:
+                if has_homework_lookup_intent(text) or "дз" in text or "домаш" in text:
+                    await send_materials_by_lookup(
+                        message,
+                        {
+                            "lesson_key": lesson.lesson_key,
+                            "lesson_date": lesson.date_start,
+                            "module_number": lesson.lesson_number,
+                            "content_type": "homework",
+                            "label": lesson.lesson_title,
+                        },
+                        telegram_user=telegram_user,
+                        state=state,
+                    )
+                    return True
+                if wants_lesson_date(text):
+                    await remember_lesson_context(state, lesson)
+                    await message.answer(format_lesson_card(lesson), reply_markup=schedule_lesson_keyboard(lesson), parse_mode=None)
+                    if should_send_schedule_image_for_question(text):
+                        await send_schedule_image(message)
+                    return True
+                if wants_lesson_card_request(text):
+                    await send_materials_lesson_card(message, lesson, telegram_user=telegram_user, state=state)
+                    return True
+                if not wants_lesson_overview(text):
+                    await send_materials_lesson_card(message, lesson, telegram_user=telegram_user, state=state)
+                    return True
                 await send_lesson_overview(
                     message,
                     lesson,
@@ -2158,8 +2638,50 @@ def build_main_router(container: AppContainer) -> Router:
                 )
                 return True
 
-        speaker_marker = extract_speaker_marker(text)
-        if speaker_marker and has_lesson_context_words(text):
+        block_key = block_key_from_text(text)
+        lesson_number = lesson_number_from_text(text)
+        if block_key and lesson_number and (
+            wants_lesson_overview(text)
+            or wants_lesson_card_request(text)
+            or wants_lesson_date(text)
+            or has_homework_lookup_intent(text)
+        ):
+            async with SessionLocal() as session:
+                lesson = await ProgramLessonRepository.get_by_key(session, f"{block_key}_l{lesson_number}")
+            if lesson is not None:
+                if has_homework_lookup_intent(text) or "дз" in text or "домаш" in text:
+                    await send_materials_by_lookup(
+                        message,
+                        {
+                            "lesson_key": lesson.lesson_key,
+                            "lesson_date": lesson.date_start,
+                            "module_number": lesson.lesson_number,
+                            "content_type": "homework",
+                            "label": lesson.lesson_title,
+                        },
+                        telegram_user=telegram_user,
+                        state=state,
+                    )
+                    return True
+                if wants_lesson_date(text):
+                    await remember_lesson_context(state, lesson)
+                    await message.answer(format_lesson_card(lesson), reply_markup=schedule_lesson_keyboard(lesson), parse_mode=None)
+                    if should_send_schedule_image_for_question(text):
+                        await send_schedule_image(message)
+                    return True
+                if wants_lesson_card_request(text):
+                    await send_materials_lesson_card(message, lesson, telegram_user=telegram_user, state=state)
+                    return True
+                await send_lesson_overview(
+                    message,
+                    lesson,
+                    state=state,
+                    question_text=text_value,
+                    telegram_user=telegram_user,
+                )
+                return True
+
+        if speaker_marker and (has_lesson_context_words(text) or wants_lesson_overview(text)):
             async with SessionLocal() as session:
                 lessons = await ProgramLessonRepository.list_active(session)
             lessons = [
@@ -2170,16 +2692,26 @@ def build_main_router(container: AppContainer) -> Router:
             if not lessons:
                 return False
             if len(lessons) > 1:
-                lines = [
-                    f"Нашёл несколько занятий со спикером «{speaker_marker}».",
-                    "Выбери, какое занятие имеешь в виду:",
-                    "",
-                ]
-                for lesson in lessons:
-                    lines.append(f"- {lesson.lesson_title} ({schedule_lesson_date_text(lesson)})")
-                await message.answer("\n".join(lines), reply_markup=materials_lessons_keyboard(lessons), parse_mode=None)
-                return True
-            lesson = lessons[0]
+                selected_lesson = select_single_lesson_from_candidates(text, lessons)
+                if selected_lesson is not None:
+                    lesson = selected_lesson
+                else:
+                    lines = [
+                        f"Нашёл несколько занятий со спикером «{speaker_marker}».",
+                        "Выбери, какое занятие имеешь в виду:",
+                        "",
+                    ]
+                    for lesson in lessons:
+                        lines.append(f"- {lesson.lesson_title} ({schedule_lesson_date_text(lesson)})")
+                    if wants_lesson_overview(text):
+                        await state.update_data(
+                            pending_lesson_question=text_value,
+                            pending_lesson_candidate_keys=[lesson.lesson_key for lesson in lessons],
+                        )
+                    await message.answer("\n".join(lines), reply_markup=materials_lessons_keyboard(lessons), parse_mode=None)
+                    return True
+            else:
+                lesson = lessons[0]
             if has_homework_lookup_intent(text) or "дз" in text or "домаш" in text:
                 await send_materials_by_lookup(
                     message,
@@ -2191,10 +2723,11 @@ def build_main_router(container: AppContainer) -> Router:
                         "label": lesson.lesson_title,
                     },
                     telegram_user=telegram_user,
+                    state=state,
                 )
                 return True
             if wants_lesson_card_request(text):
-                await send_materials_lesson_card(message, lesson, telegram_user=telegram_user)
+                await send_materials_lesson_card(message, lesson, telegram_user=telegram_user, state=state)
                 return True
             if wants_lesson_overview(text):
                 await send_lesson_overview(
@@ -2205,7 +2738,7 @@ def build_main_router(container: AppContainer) -> Router:
                     telegram_user=telegram_user,
                 )
                 return True
-            await send_materials_lesson_card(message, lesson, telegram_user=telegram_user)
+            await send_materials_lesson_card(message, lesson, telegram_user=telegram_user, state=state)
             return True
 
         return False
@@ -2468,7 +3001,7 @@ def build_main_router(container: AppContainer) -> Router:
         lines.extend(["", "Эти задания уже не показываются в основном списке, но их можно открыть для справки."])
         await message.answer("\n".join(lines), reply_markup=homework_list_keyboard(homeworks), parse_mode=None)
 
-    async def send_homework_item(message: Message, homework_id: int) -> None:
+    async def send_homework_item(message: Message, homework_id: int) -> bool:
         async with SessionLocal() as session:
             homework = await HomeworkRepository.get_by_id(session, homework_id)
             related_documents = []
@@ -2484,7 +3017,7 @@ def build_main_router(container: AppContainer) -> Router:
         if homework is None or homework.status != "active":
             await message.answer("Не нашёл такое домашнее задание. Показываю список актуальных заданий.")
             await send_homework_list(message)
-            return
+            return False
 
         lines = [
             f"Домашнее задание: {escape(homework.title)}",
@@ -2504,6 +3037,7 @@ def build_main_router(container: AppContainer) -> Router:
         await message.answer("\n".join(lines), reply_markup=homework_detail_keyboard(homework.id))
         for document in related_documents:
             await send_document_original(message, document)
+        return True
 
     async def start_homework_help(message: Message, state: FSMContext, homework_id: int | None = None) -> None:
         await state.set_state(UserFlow.waiting_for_homework_help_question)
@@ -2740,7 +3274,7 @@ def build_main_router(container: AppContainer) -> Router:
             await send_homework_archive(callback.message)
 
     @router.callback_query(F.data.startswith("homework:item:"))
-    async def homework_item_callback_handler(callback: CallbackQuery) -> None:
+    async def homework_item_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
         await upsert_telegram_user(callback.from_user)
         await callback.answer()
         try:
@@ -2750,7 +3284,10 @@ def build_main_router(container: AppContainer) -> Router:
                 await callback.message.answer("Не понял, какое домашнее задание открыть.")
             return
         if callback.message:
-            await send_homework_item(callback.message, homework_id)
+            opened = await send_homework_item(callback.message, homework_id)
+            if opened:
+                await state.set_state(UserFlow.waiting_for_homework_help_question)
+                await state.update_data(selected_homework_id=homework_id)
 
     @router.callback_query(F.data.startswith("homework:help"))
     async def homework_help_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
@@ -2926,11 +3463,10 @@ def build_main_router(container: AppContainer) -> Router:
     @router.message(F.text == "Кабинет руководителя")
     async def director_dashboard_handler(message: Message, state: FSMContext) -> None:
         user = await ensure_user(message)
-        demo_access = is_director_dashboard_demo_user(user.telegram_id)
         async with SessionLocal() as session:
             has_team = await DirectorAssignmentRepository.has_active_team(session, user.telegram_id)
 
-        if not is_admin(message) and not has_team and not demo_access:
+        if not is_admin(message) and not has_team:
             await message.answer(
                 "Кабинет руководителя пока доступен только руководителям с назначенной командой. "
                 "Если доступ нужен, напиши организаторам программы.",
@@ -2959,10 +3495,14 @@ def build_main_router(container: AppContainer) -> Router:
             secret=container.settings.video_link_secret,
             ttl_hours=container.settings.video_link_ttl_hours,
         )
+        admin_names = [
+            DIRECTOR_DISPLAY_NAMES.get(admin_id, str(admin_id))
+            for admin_id in container.settings.admin_ids
+        ]
         access_note = (
-            "Это тестовый режим для администраторов. "
-            "В реальном режиме руководитель увидит только сотрудников, которые будут явно назначены ему в базе."
-            if is_admin(message) or demo_access
+            "Администраторы видят общий прогресс всех сотрудников из последней выгрузки: "
+            + ", ".join(admin_names)
+            if is_admin(message)
             else "Ты увидишь только сотрудников, назначенных тебе в базе программы."
         )
         await message.answer(
@@ -3538,12 +4078,27 @@ def build_main_router(container: AppContainer) -> Router:
             reply_markup=admin_material_season_keyboard(),
         )
 
-    @router.message(AdminFlow.waiting_for_material_season, F.text.in_(["Материал: Сезон 1. Бизнес-консалтинг", "Материал: без сезона"]))
+    @router.message(
+        AdminFlow.waiting_for_material_season,
+        F.text.in_(
+            [
+                "Материал: Сезон 1. Бизнес-консалтинг",
+                "Материал: Сезон 2. Люди",
+                "Материал: без сезона",
+            ]
+        ),
+    )
     async def admin_material_season_handler(message: Message, state: FSMContext) -> None:
         if not await require_admin(message):
             await state.clear()
             return
-        if message.text == "Материал: без сезона":
+        season = parse_admin_scoped_season_button(message.text, "Материал")
+        if season is None:
+            await message.answer("Выбери сезон кнопкой ниже или нажми «Админ: меню».", reply_markup=admin_material_season_keyboard())
+            return
+
+        season_key, season_title = season
+        if season_key is None:
             await state.update_data(material_season_key=None, material_season_title=None)
             await state.set_state(AdminFlow.waiting_for_material_module)
             await message.answer(
@@ -3553,11 +4108,23 @@ def build_main_router(container: AppContainer) -> Router:
             )
             return
 
-        await state.update_data(material_season_key="s1", material_season_title="Бизнес")
+        await state.update_data(material_season_key=season_key, material_season_title=season_title)
+        async with SessionLocal() as session:
+            blocks = await ProgramLessonRepository.list_blocks(session, season_key)
+        if not blocks:
+            await state.set_state(AdminFlow.waiting_for_material_module)
+            await message.answer(
+                f"Для сезона «{season_title}» расписание ещё не добавлено.\n\n"
+                "Пока можно загрузить общий материал сезона или материал условного урока/модуля. "
+                "Когда появится расписание, мастер начнёт вести по блокам и занятиям.",
+                reply_markup=admin_material_module_keyboard(),
+            )
+            return
+
         await state.set_state(AdminFlow.waiting_for_material_block)
         await message.answer(
             "Шаг 2: выбери блок программы.",
-            reply_markup=await admin_blocks_keyboard("s1"),
+            reply_markup=await admin_blocks_keyboard(season_key),
         )
 
     @router.message(AdminFlow.waiting_for_material_block, F.text)
@@ -3630,7 +4197,12 @@ def build_main_router(container: AppContainer) -> Router:
             await state.clear()
             return
         data = await state.get_data()
-        payload = lesson_payload("material", data.get("material_season_title"), message.text)
+        payload = lesson_payload(
+            "material",
+            data.get("material_season_title"),
+            message.text,
+            data.get("material_season_key"),
+        )
         await state.update_data(**payload)
         await state.set_state(AdminFlow.waiting_for_material_date)
         await message.answer(
@@ -3898,7 +4470,7 @@ def build_main_router(container: AppContainer) -> Router:
             "Запускаю мастер загрузки видео/подкаста.\n\n"
             "Эти файлы бот будет отдавать пользователям в разделе материалов, но ИИ не будет использовать их как источник ответа.\n"
             "Если видео тяжёлое, лучше предварительно сжать его и отправить как файл/документ .mp4.\n\n"
-            "Шаг 1 из 4: выбери тип файла.",
+            "Шаг 1: выбери тип файла.",
             reply_markup=admin_media_type_keyboard(),
             parse_mode=None,
         )
@@ -3930,15 +4502,67 @@ def build_main_router(container: AppContainer) -> Router:
                 reply_markup=admin_menu_keyboard(),
             )
             return
-        await state.set_state(AdminFlow.waiting_for_media_block)
+        await state.set_state(AdminFlow.waiting_for_media_season)
         await message.answer(
-            "Шаг 2: выбери блок программы.",
-            reply_markup=await admin_blocks_keyboard("s1"),
+            "Шаг 2: выбери сезон.",
+            reply_markup=admin_media_season_keyboard(),
         )
 
     @router.message(AdminFlow.waiting_for_media_type)
     async def admin_media_type_invalid_handler(message: Message) -> None:
         await message.answer("Выбери тип медиа кнопкой ниже или нажми «Админ: меню».", reply_markup=admin_media_type_keyboard())
+
+    @router.message(
+        AdminFlow.waiting_for_media_season,
+        F.text.in_(
+            [
+                "Медиа: Сезон 1. Бизнес-консалтинг",
+                "Медиа: Сезон 2. Люди",
+                "Медиа: без сезона",
+            ]
+        ),
+    )
+    async def admin_media_season_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        season = parse_admin_scoped_season_button(message.text, "Медиа")
+        if season is None:
+            await message.answer("Выбери сезон кнопкой ниже или нажми «Админ: меню».", reply_markup=admin_media_season_keyboard())
+            return
+
+        season_key, season_title = season
+        await state.update_data(media_season_key=season_key, media_season_title=season_title)
+        if season_key is None:
+            await state.set_state(AdminFlow.waiting_for_media_module)
+            await message.answer(
+                "Шаг 3: выбери привязку медиа.\n\n"
+                "Это запасной путь для общих медиа без привязки к расписанию.",
+                reply_markup=admin_media_module_keyboard(),
+            )
+            return
+
+        async with SessionLocal() as session:
+            blocks = await ProgramLessonRepository.list_blocks(session, season_key)
+        if not blocks:
+            await state.set_state(AdminFlow.waiting_for_media_module)
+            await message.answer(
+                f"Для сезона «{season_title}» расписание ещё не добавлено.\n\n"
+                "Пока можно загрузить общее видео/подкаст сезона или медиа условного урока/модуля. "
+                "Когда появится расписание, мастер начнёт вести по блокам и занятиям.",
+                reply_markup=admin_media_module_keyboard(),
+            )
+            return
+
+        await state.set_state(AdminFlow.waiting_for_media_block)
+        await message.answer(
+            "Шаг 3: выбери блок программы.",
+            reply_markup=await admin_blocks_keyboard(season_key),
+        )
+
+    @router.message(AdminFlow.waiting_for_media_season)
+    async def admin_media_season_invalid_handler(message: Message) -> None:
+        await message.answer("Выбери сезон кнопкой ниже или нажми «Админ: меню».", reply_markup=admin_media_season_keyboard())
 
     @router.message(AdminFlow.waiting_for_media_block, F.text)
     async def admin_media_block_handler(message: Message, state: FSMContext) -> None:
@@ -3949,12 +4573,14 @@ def build_main_router(container: AppContainer) -> Router:
             await state.clear()
             await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
             return
+        data = await state.get_data()
+        season_key = data.get("media_season_key") or "s1"
         async with SessionLocal() as session:
-            blocks = await ProgramLessonRepository.list_blocks(session, "s1")
+            blocks = await ProgramLessonRepository.list_blocks(session, season_key)
         block_by_label = {block_button_label(block): block for block in blocks}
         block = block_by_label.get(message.text)
         if block is None:
-            await message.answer("Выбери блок кнопкой ниже или нажми «Админ: меню».", reply_markup=await admin_blocks_keyboard("s1"))
+            await message.answer("Выбери блок кнопкой ниже или нажми «Админ: меню».", reply_markup=await admin_blocks_keyboard(season_key))
             return
         block_key, block_title, block_order = block
         await state.update_data(media_block_key=block_key, media_block_title=block_title, media_block_order=block_order)
@@ -4017,7 +4643,13 @@ def build_main_router(container: AppContainer) -> Router:
         if not await require_admin(message):
             await state.clear()
             return
-        payload = lesson_payload("media", "Сезон 1. Бизнес-консалтинг", message.text)
+        data = await state.get_data()
+        payload = lesson_payload(
+            "media",
+            data.get("media_season_title"),
+            message.text,
+            data.get("media_season_key"),
+        )
         await state.update_data(**payload)
         await state.set_state(AdminFlow.waiting_for_media_date)
         await message.answer(
@@ -4129,7 +4761,7 @@ def build_main_router(container: AppContainer) -> Router:
             lesson_key=lesson_key,
             module_number=module_number,
             lesson_date=lesson_date,
-            season_title="Сезон 1. Бизнес-консалтинг",
+            season_title=state_data.get("media_season_title"),
             media_type=media_type,
         )
         async with SessionLocal() as session:
@@ -4837,7 +5469,7 @@ def build_main_router(container: AppContainer) -> Router:
         )
 
     @router.callback_query(F.data.startswith("schedule:lesson:"))
-    async def schedule_lesson_callback_handler(callback: CallbackQuery) -> None:
+    async def schedule_lesson_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
         await upsert_telegram_user(callback.from_user)
         await callback.answer()
         lesson_key = (callback.data or "").split(":")[-1]
@@ -4851,10 +5483,11 @@ def build_main_router(container: AppContainer) -> Router:
                 reply_markup=await user_main_menu_for_callback(callback),
             )
             return
+        await remember_lesson_context(state, lesson)
         await callback.message.answer(format_lesson_card(lesson), reply_markup=schedule_lesson_keyboard(lesson), parse_mode=None)
 
     @router.callback_query(F.data.startswith("schedule:materials:"))
-    async def schedule_materials_callback_handler(callback: CallbackQuery) -> None:
+    async def schedule_materials_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
         await upsert_telegram_user(callback.from_user)
         await callback.answer()
         lesson_key = (callback.data or "").split(":")[-1]
@@ -4877,6 +5510,7 @@ def build_main_router(container: AppContainer) -> Router:
                 "label": lesson.lesson_title,
             },
             telegram_user=callback.from_user,
+            state=state,
         )
 
     @router.message(F.text.in_(["Настройки уведомлений", "Настройка уведомлений"]))
@@ -4927,7 +5561,7 @@ def build_main_router(container: AppContainer) -> Router:
     @router.message(F.text.in_(["Задать вопрос", "Задать вопрос по организации Лиги Лидеров", "Задать вопрос по обучению"]))
     async def ask_training_question_handler(message: Message, state: FSMContext) -> None:
         await ensure_user(message)
-        await state.clear()
+        await clear_flow_keep_dialog_context(state)
         await message.answer("Выбери раздел по своему вопросу:", reply_markup=question_section_keyboard())
 
     @router.message(F.text == "Материалы программы")
@@ -4941,7 +5575,7 @@ def build_main_router(container: AppContainer) -> Router:
         )
 
     @router.callback_query(F.data == "materials:last_lesson")
-    async def materials_last_lesson_callback_handler(callback: CallbackQuery) -> None:
+    async def materials_last_lesson_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
         await upsert_telegram_user(callback.from_user)
         await callback.answer()
         if not callback.message:
@@ -4954,7 +5588,7 @@ def build_main_router(container: AppContainer) -> Router:
                 reply_markup=materials_program_keyboard(),
             )
             return
-        await send_materials_lesson_card(callback.message, lesson, telegram_user=callback.from_user)
+        await send_materials_lesson_card(callback.message, lesson, telegram_user=callback.from_user, state=state)
 
     @router.callback_query(F.data == "materials:choose_lesson")
     async def materials_choose_lesson_callback_handler(callback: CallbackQuery) -> None:
@@ -4983,7 +5617,7 @@ def build_main_router(container: AppContainer) -> Router:
         )
 
     @router.callback_query(F.data.startswith("materials:lesson:"))
-    async def materials_lesson_callback_handler(callback: CallbackQuery) -> None:
+    async def materials_lesson_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
         await upsert_telegram_user(callback.from_user)
         await callback.answer()
         if not callback.message or not callback.data:
@@ -4994,7 +5628,20 @@ def build_main_router(container: AppContainer) -> Router:
         if lesson is None:
             await callback.message.answer("Не нашёл это занятие.", reply_markup=materials_program_keyboard())
             return
-        await send_materials_lesson_card(callback.message, lesson, telegram_user=callback.from_user)
+        state_data = await state.get_data()
+        pending_question = state_data.get("pending_lesson_question")
+        pending_candidate_keys = state_data.get("pending_lesson_candidate_keys") or []
+        if pending_question and lesson_key in pending_candidate_keys and wants_lesson_overview(pending_question):
+            await state.update_data(pending_lesson_question=None, pending_lesson_candidate_keys=None)
+            await send_lesson_overview(
+                callback.message,
+                lesson,
+                state=state,
+                question_text=pending_question,
+                telegram_user=callback.from_user,
+            )
+            return
+        await send_materials_lesson_card(callback.message, lesson, telegram_user=callback.from_user, state=state)
 
     @router.callback_query(F.data.startswith("materials:lesson_docs:"))
     async def materials_lesson_docs_callback_handler(callback: CallbackQuery) -> None:
@@ -5405,27 +6052,30 @@ def build_main_router(container: AppContainer) -> Router:
     @router.message(UserFlow.waiting_for_training_question, F.text)
     async def training_question_input_handler(message: Message, state: FSMContext) -> None:
         if await answer_direct_question_if_supported(message, message.text, state):
-            await state.clear()
+            await clear_flow_keep_dialog_context(state)
             return
         material_question = parse_material_question(message.text)
         if material_question is not None:
             document_id, question = material_question
             await answer_material_question(message, document_id, question, state)
-            await state.clear()
+            await clear_flow_keep_dialog_context(state)
+            return
+        if await answer_structured_lesson_question_if_supported(message, message.text, state):
+            await clear_flow_keep_dialog_context(state)
             return
         material_lookup = extract_material_lookup(message.text)
         if material_lookup is not None:
-            await send_materials_by_lookup(message, material_lookup)
-            await state.clear()
+            await send_materials_by_lookup(message, material_lookup, state=state)
+            await clear_flow_keep_dialog_context(state)
             return
         extra_context = await build_schedule_context_for_llm() if looks_like_schedule_question(message.text) else None
         await answer_question(message, message.text, state, mode="training_qa", extra_context=extra_context)
-        await state.clear()
+        await clear_flow_keep_dialog_context(state)
 
     @router.message(UserFlow.waiting_for_categorized_question, F.text)
     async def categorized_question_input_handler(message: Message, state: FSMContext) -> None:
         if await answer_direct_question_if_supported(message, message.text, state):
-            await state.clear()
+            await clear_flow_keep_dialog_context(state)
             return
         data = await state.get_data()
         section = data.get("question_section")
@@ -5433,12 +6083,15 @@ def build_main_router(container: AppContainer) -> Router:
         if material_question is not None:
             document_id, question = material_question
             await answer_material_question(message, document_id, question, state)
-            await state.clear()
+            await clear_flow_keep_dialog_context(state)
+            return
+        if section != "technical" and await answer_structured_lesson_question_if_supported(message, message.text, state):
+            await clear_flow_keep_dialog_context(state)
             return
         material_lookup = extract_material_lookup(message.text)
         if material_lookup is not None:
-            await send_materials_by_lookup(message, material_lookup)
-            await state.clear()
+            await send_materials_by_lookup(message, material_lookup, state=state)
+            await clear_flow_keep_dialog_context(state)
             return
 
         if section != "technical" and looks_like_technical_question(message.text):
@@ -5456,15 +6109,15 @@ def build_main_router(container: AppContainer) -> Router:
             force_rag=force_rag,
             extra_context=extra_context,
         )
-        await state.clear()
+        await clear_flow_keep_dialog_context(state)
 
     @router.message(UserFlow.waiting_for_project_help_question, F.text)
     async def project_help_question_input_handler(message: Message, state: FSMContext) -> None:
         if await answer_direct_question_if_supported(message, message.text, state):
-            await state.clear()
+            await clear_flow_keep_dialog_context(state)
             return
         await answer_question(message, message.text, state, mode="project_help")
-        await state.clear()
+        await clear_flow_keep_dialog_context(state)
 
     @router.message(UserFlow.waiting_for_homework_help_question, F.text)
     async def homework_help_question_input_handler(message: Message, state: FSMContext) -> None:
@@ -5472,7 +6125,7 @@ def build_main_router(container: AppContainer) -> Router:
         if material_question is not None:
             document_id, question = material_question
             await answer_material_question(message, document_id, question, state)
-            await state.clear()
+            await clear_flow_keep_dialog_context(state)
             return
         if looks_like_technical_question(message.text):
             mode, extra_context, force_rag = question_section_context("technical")
@@ -5484,7 +6137,7 @@ def build_main_router(container: AppContainer) -> Router:
                 force_rag=force_rag,
                 extra_context=extra_context,
             )
-            await state.clear()
+            await clear_flow_keep_dialog_context(state)
             return
 
         data = await state.get_data()
@@ -5534,7 +6187,7 @@ def build_main_router(container: AppContainer) -> Router:
                 "Если сомневаешься, лучше уточнить вопрос в общем чате программы или у организаторов.",
                 reply_markup=homework_program_keyboard(),
             )
-            await state.clear()
+            await clear_flow_keep_dialog_context(state)
             return
 
         extra_context = (
@@ -5559,40 +6212,43 @@ def build_main_router(container: AppContainer) -> Router:
             lesson_date=rag_lesson_date,
             document_ids=rag_document_ids,
         )
-        await state.clear()
+        await clear_flow_keep_dialog_context(state)
 
     @router.message(UserFlow.waiting_for_file_question, F.text)
     async def file_question_input_handler(message: Message, state: FSMContext) -> None:
         if await answer_direct_question_if_supported(message, message.text, state):
-            await state.clear()
+            await clear_flow_keep_dialog_context(state)
             return
         material_question = parse_material_question(message.text)
         if material_question is not None:
             document_id, question = material_question
             await answer_material_question(message, document_id, question, state)
-            await state.clear()
+            await clear_flow_keep_dialog_context(state)
             return
         await answer_question(message, message.text, state, mode="user_file_qa")
-        await state.clear()
+        await clear_flow_keep_dialog_context(state)
 
     @router.message(UserFlow.waiting_for_followup, F.text)
     async def followup_input_handler(message: Message, state: FSMContext) -> None:
         if await answer_direct_question_if_supported(message, message.text, state):
-            await state.clear()
+            await clear_flow_keep_dialog_context(state)
             return
         material_question = parse_material_question(message.text)
         if material_question is not None:
             document_id, question = material_question
             await answer_material_question(message, document_id, question, state)
-            await state.clear()
+            await clear_flow_keep_dialog_context(state)
+            return
+        if await answer_structured_lesson_question_if_supported(message, message.text, state):
+            await clear_flow_keep_dialog_context(state)
             return
         material_lookup = extract_material_lookup(message.text)
         if material_lookup is not None:
-            await send_materials_by_lookup(message, material_lookup)
-            await state.clear()
+            await send_materials_by_lookup(message, material_lookup, state=state)
+            await clear_flow_keep_dialog_context(state)
             return
         await answer_question(message, message.text, state, mode="followup")
-        await state.clear()
+        await clear_flow_keep_dialog_context(state)
 
     @router.message(UserFlow.waiting_for_project_context, F.text)
     async def project_context_input_handler(message: Message, state: FSMContext) -> None:
@@ -6088,14 +6744,14 @@ def build_main_router(container: AppContainer) -> Router:
             current_state = await state.get_state()
             if current_state != UserFlow.waiting_for_homework_help_question.state:
                 if await answer_direct_question_if_supported(message, question, state):
-                    await state.clear()
+                    await clear_flow_keep_dialog_context(state)
                     return
                 structured_allowed = True
                 if current_state == UserFlow.waiting_for_categorized_question.state:
                     state_data = await state.get_data()
                     structured_allowed = state_data.get("question_section") != "technical"
                 if structured_allowed and await answer_structured_lesson_question_if_supported(message, question, state):
-                    await state.clear()
+                    await clear_flow_keep_dialog_context(state)
                     return
 
             if current_state == UserFlow.waiting_for_categorized_question.state:
@@ -6136,7 +6792,7 @@ def build_main_router(container: AppContainer) -> Router:
                     mode="voice_question",
                     extra_context=extra_context,
                 )
-            await state.clear()
+            await clear_flow_keep_dialog_context(state)
         except Exception as exc:
             logger.exception("voice_question_transcription_failed")
             user = await ensure_user(message)
@@ -6167,7 +6823,7 @@ def build_main_router(container: AppContainer) -> Router:
             return
         material_lookup = extract_material_lookup(message.text)
         if material_lookup is not None:
-            await send_materials_by_lookup(message, material_lookup)
+            await send_materials_by_lookup(message, material_lookup, state=state)
             return
         if looks_like_technical_question(message.text):
             mode, extra_context, force_rag = question_section_context("technical")

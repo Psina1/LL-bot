@@ -27,6 +27,7 @@ class AdminFlow(StatesGroup):
     waiting_for_homework_deadline = State()
     waiting_for_global_file = State()
     waiting_for_media_type = State()
+    waiting_for_media_season = State()
     waiting_for_media_block = State()
     waiting_for_media_lesson = State()
     waiting_for_media_module = State()

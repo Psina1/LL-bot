@@ -737,9 +737,9 @@ def build_real_director_progress_data(settings, data: dict, telegram_id: int, ad
     if source is None:
         return None
 
-    is_admin = telegram_id in set(admin_ids)
+    is_admin_overview = telegram_id in set(admin_ids) and data.get("mode") == "admin_test"
     neuro_placeholder = choose_director_placeholder(settings)
-    if is_admin:
+    if is_admin_overview:
         people_source = list(source.get("participants") or [])
         team_title = "Все сотрудники программы"
         director_label = DIRECTOR_DISPLAY_NAMES.get(telegram_id, str(telegram_id))
