@@ -13,7 +13,8 @@ UNKNOWN_SPEAKER_LABELS = (
 )
 TECHNICAL_SPEAKER_RE = re.compile(r"\bSPEAKER[_\s-]?\d{1,3}\b", re.IGNORECASE)
 PERSON_QUESTION_RE = re.compile(
-    r"\b(говорил[аи]?|сказал[аи]?|отметил[аи]?|подчеркнул[аи]?|цитат[а-я]*)\b",
+    r"\b(говорил[аи]?|сказал[аи]?|рассказывал[аи]?|обсуждал[аи]?|отметил[аи]?|"
+    r"подчеркнул[аи]?|цитат[а-я]*|тезис[а-я]*|мысл[а-я]*|выступлен[а-я]*)\b",
     re.IGNORECASE,
 )
 GENERAL_DISCUSSION_RE = re.compile(
@@ -40,10 +41,14 @@ def parse_lesson_speakers(speaker_field: str | None) -> list[str]:
 def requested_speaker(question: str, speakers: list[str]) -> str | None:
     if not PERSON_QUESTION_RE.search(question):
         return None
-    normalized_question = _normalize(question)
+    question_tokens = _normalize(question).split()
     for speaker in speakers:
         tokens = [token for token in _normalize(speaker).split() if len(token) >= 3]
-        if any(token in normalized_question for token in tokens):
+        if any(
+            _matches_inflected_name(token, question_token)
+            for token in tokens
+            for question_token in question_tokens
+        ):
             return speaker
     return None
 
@@ -214,3 +219,13 @@ def _speaker_surname(speaker: str) -> str | None:
     if not candidates:
         return None
     return max(candidates, key=len)
+
+
+def _matches_inflected_name(catalog_token: str, question_token: str) -> bool:
+    if catalog_token == question_token:
+        return True
+
+    # Russian surnames and first names commonly gain case endings in a question:
+    # "Семенов" -> "Семенова", "Макарова" -> "Макаровой".
+    stem = catalog_token[:-1] if catalog_token.endswith(("а", "я")) else catalog_token
+    return len(stem) >= 5 and question_token.startswith(stem)
