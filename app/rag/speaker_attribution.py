@@ -66,13 +66,10 @@ def split_transcript_by_speaker(
     if not matches:
         return _unattributed_chunks(text, chunk_size)
 
-    chunks: list[SpeakerChunk] = []
-    chunk_index = 0
+    segments: list[tuple[str | None, str, str]] = []
     prefix = text[: matches[0].start()].strip()
     if prefix:
-        chunk_index = _append_segment_chunks(
-            chunks, chunk_index, prefix, None, "unattributed", chunk_size
-        )
+        _append_or_merge_segment(segments, None, "unattributed", prefix)
 
     for index, match in enumerate(matches):
         segment_end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
@@ -81,6 +78,11 @@ def split_transcript_by_speaker(
             continue
         label = match.group(0)
         speaker_name, status = _classify_label(label, known_speakers)
+        _append_or_merge_segment(segments, speaker_name, status, segment_text)
+
+    chunks: list[SpeakerChunk] = []
+    chunk_index = 0
+    for speaker_name, status, segment_text in segments:
         chunk_index = _append_segment_chunks(
             chunks, chunk_index, segment_text, speaker_name, status, chunk_size
         )
@@ -171,6 +173,19 @@ def _append_segment_chunks(
         )
         index += 1
     return index
+
+
+def _append_or_merge_segment(
+    segments: list[tuple[str | None, str, str]],
+    speaker_name: str | None,
+    speaker_status: str,
+    text: str,
+) -> None:
+    if segments and segments[-1][0] == speaker_name and segments[-1][1] == speaker_status:
+        previous_name, previous_status, previous_text = segments[-1]
+        segments[-1] = (previous_name, previous_status, f"{previous_text}\n{text}")
+        return
+    segments.append((speaker_name, speaker_status, text))
 
 
 def _unattributed_chunks(text: str, chunk_size: int) -> list[SpeakerChunk]:

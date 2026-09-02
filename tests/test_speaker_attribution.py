@@ -53,6 +53,15 @@ class SpeakerAttributionTests(unittest.TestCase):
         self.assertEqual(chunks[0].speaker_status, "unknown")
         self.assertIsNone(chunks[0].speaker_name)
 
+    def test_adjacent_unknown_turns_are_coalesced(self) -> None:
+        chunks = split_transcript_by_speaker(
+            "SPEAKER_01 Первая мысль.\nSPEAKER_02 Вторая мысль.",
+            ["Александр Семенов"],
+        )
+        self.assertEqual(len(chunks), 1)
+        self.assertIn("Первая мысль", chunks[0].chunk_text)
+        self.assertIn("Вторая мысль", chunks[0].chunk_text)
+
     def test_neutralizes_unconfirmed_author_role(self) -> None:
         self.assertEqual(
             neutralize_anonymous_authors("Участники согласились проверить гипотезу."),
