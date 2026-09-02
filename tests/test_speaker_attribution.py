@@ -62,6 +62,14 @@ class SpeakerAttributionTests(unittest.TestCase):
         self.assertIn("Первая мысль", chunks[0].chunk_text)
         self.assertIn("Вторая мысль", chunks[0].chunk_text)
 
+    def test_initial_and_surname_catalog_matches_full_transcript_name(self) -> None:
+        chunks = split_transcript_by_speaker(
+            "Александр Семенов\nСтратегия помогает уйти от ручного управления.",
+            ["Семенов А."],
+        )
+        self.assertEqual(chunks[0].speaker_name, "Семенов А.")
+        self.assertEqual(chunks[0].speaker_status, "confirmed")
+
     def test_neutralizes_unconfirmed_author_role(self) -> None:
         self.assertEqual(
             neutralize_anonymous_authors("Участники согласились проверить гипотезу."),
