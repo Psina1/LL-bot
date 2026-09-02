@@ -135,11 +135,17 @@ def _speaker_labels(known_speakers: list[str]) -> list[str]:
         r"^[ \t]*\[?Неизвестный спикер\]?",
         rf"^[ \t]*{TECHNICAL_SPEAKER_RE.pattern}",
     ]
-    labels.extend(
-        rf"^[ \t]*{re.escape(speaker)}(?=\s|$)"
-        for speaker in known_speakers
-        if len(speaker.strip()) >= 3
-    )
+    for speaker in known_speakers:
+        if len(speaker.strip()) < 3:
+            continue
+        labels.append(rf"^[ \t]*{re.escape(speaker)}(?=\s|$)")
+        surname = _speaker_surname(speaker)
+        if surname:
+            full_word = r"[А-ЯЁ][а-яё-]+"
+            labels.append(
+                rf"^[ \t]*(?:{full_word}[ \t]+{re.escape(surname)}|"
+                rf"{re.escape(surname)}[ \t]+{full_word})(?=\s|$)"
+            )
     return labels
 
 
@@ -149,6 +155,9 @@ def _classify_label(label: str, known_speakers: list[str]) -> tuple[str | None, 
         return None, "unknown"
     for speaker in known_speakers:
         if _normalize(speaker) == normalized:
+            return speaker, "confirmed"
+        surname = _speaker_surname(speaker)
+        if surname and _normalize(surname) in normalized.split():
             return speaker, "confirmed"
     return None, "unattributed"
 
@@ -197,3 +206,11 @@ def _unattributed_chunks(text: str, chunk_size: int) -> list[SpeakerChunk]:
 
 def _normalize(value: str) -> str:
     return re.sub(r"[^a-zа-яё0-9]+", " ", value.casefold()).strip()
+
+
+def _speaker_surname(speaker: str) -> str | None:
+    tokens = re.findall(r"[А-ЯЁа-яё-]+", speaker)
+    candidates = [token for token in tokens if len(token) >= 3]
+    if not candidates:
+        return None
+    return max(candidates, key=len)

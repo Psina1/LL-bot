@@ -116,7 +116,7 @@ DEFAULT_PROGRAM_LESSONS = [
         "date_start": date(2026, 6, 23),
         "date_end": None,
         "date_text": "23.06.2026",
-        "speaker": "Семенов А.",
+        "speaker": "Александр Семенов",
         "content_status": None,
         "material_format": None,
         "hr_moderator_role": None,
