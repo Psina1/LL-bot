@@ -66,6 +66,11 @@ requirements.txt
 - `OPENAI_CHAT_MODEL`
 - `OPENAI_EMBEDDING_MODEL`
 - лимиты: `MAX_FILE_SIZE_MB`, `MAX_CONTEXT_CHUNKS`, `MAX_CONTEXT_CHARS`, `MAX_USER_QUESTIONS_PER_MINUTE`
+- speaker-aware RAG: `SPEAKER_RAG_ENABLED=true` и `SPEAKER_RAG_ADMIN_ONLY=true` для пилота только на администраторах
+
+При включении speaker-aware RAG транскрипции нужно переиндексировать командой
+`python scripts/reindex_document.py <document_id>`. До переиндексации старые чанки не содержат
+метаданные говорящего, поэтому персональная атрибуция будет недоступна.
 
 Если OpenAI-ключа пока нет, можно поставить `LLM_PROVIDER=mock`.
 В этом режиме бот отвечает тестовым текстом и позволяет проверить Telegram, БД, админов и загрузку файлов.
