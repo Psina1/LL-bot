@@ -13,6 +13,7 @@ from app.db.repositories import BotTextRepository, ErrorRepository, MessageRepos
 from app.llm.client import LLMClient
 from app.llm.prompts import SYSTEM_PROMPT
 from app.rag.service import RAGService
+from app.rag.speaker_attribution import enforce_unconfirmed_speaker_answer, neutralize_anonymous_authors
 
 
 @dataclass(slots=True)
@@ -94,6 +95,10 @@ class ChatService:
     ) -> ChatAnswer:
         user_id = user.id
         project_context = user.project_context
+        speaker_rag_active = self.settings.speaker_rag_enabled and (
+            not self.settings.speaker_rag_admin_only
+            or user.telegram_id in self.settings.admin_ids
+        )
         context_text = ""
         sources: list[dict[str, Any]] = []
 
@@ -107,6 +112,7 @@ class ChatService:
                         lesson_key=lesson_key,
                         lesson_date=lesson_date,
                         document_ids=document_ids,
+                        use_speaker_rag=speaker_rag_active,
                     )
                 else:
                     rag_context = await self.rag_service.build_context_for_question(
@@ -184,7 +190,17 @@ class ChatService:
             )
 
         result = await self.llm_client.chat_completion(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt)
-        answer_text = self._ensure_sources_block(result.answer, sources)
+        answer_text = (
+            neutralize_anonymous_authors(result.answer)
+            if speaker_rag_active
+            else result.answer
+        )
+        if speaker_rag_active and rag_context.requested_speaker and rag_context.speaker_confirmed is False:
+            answer_text = enforce_unconfirmed_speaker_answer(
+                answer_text,
+                rag_context.requested_speaker,
+            )
+        answer_text = self._ensure_sources_block(answer_text, sources)
         message = await MessageRepository.create(
             session=session,
             user_id=user_id,

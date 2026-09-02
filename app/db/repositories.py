@@ -1163,6 +1163,8 @@ class ChunkRepository:
         lesson_key: str | None = None,
         lesson_date: Any | None = None,
         document_ids: list[int] | None = None,
+        speaker_name: str | None = None,
+        speaker_scope: str | None = None,
     ) -> list[ChunkMatch]:
         scope_filters = []
         if document_ids:
@@ -1171,6 +1173,11 @@ class ChunkRepository:
             scope_filters.append(Document.lesson_key == lesson_key)
         if lesson_date:
             scope_filters.append(Document.lesson_date == lesson_date)
+        speaker_filter = None
+        if speaker_name:
+            speaker_filter = Chunk.chunk_metadata["speaker_name"].astext == speaker_name
+        elif speaker_scope == "general":
+            speaker_filter = Chunk.chunk_metadata["speaker_status"].astext.in_(["unknown", "unattributed"])
 
         if not scope_filters:
             return await ChunkRepository.search_relevant(
@@ -1192,6 +1199,7 @@ class ChunkRepository:
                         and_(Document.visibility == VisibilityEnum.user, Document.owner_user_id == user_id),
                     ),
                     or_(*scope_filters),
+                    speaker_filter if speaker_filter is not None else True,
                 )
             )
             .order_by(similarity.asc())

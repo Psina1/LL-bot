@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+import unittest
+
+from app.rag.speaker_attribution import (
+    enforce_unconfirmed_speaker_answer,
+    neutralize_anonymous_authors,
+    parse_lesson_speakers,
+    requested_speaker,
+    requests_general_discussion,
+    split_transcript_by_speaker,
+)
+
+
+class SpeakerAttributionTests(unittest.TestCase):
+    def test_parse_multiple_lesson_speakers(self) -> None:
+        self.assertEqual(
+            parse_lesson_speakers("Ю. Макарова, С. Сафронов"),
+            ["Ю. Макарова", "С. Сафронов"],
+        )
+
+    def test_requested_speaker_matches_surname(self) -> None:
+        self.assertEqual(
+            requested_speaker(
+                "Что говорил Сафронов на занятии?",
+                ["Ю. Макарова", "С. Сафронов"],
+            ),
+            "С. Сафронов",
+        )
+
+    def test_detects_question_about_other_speakers(self) -> None:
+        self.assertTrue(requests_general_discussion("О чем говорили остальные участники?"))
+        self.assertTrue(requests_general_discussion("Какие мысли прозвучали в общем обсуждении?"))
+        self.assertFalse(requests_general_discussion("О чем говорил Александр Семенов?"))
+
+    def test_transcript_chunks_do_not_cross_speakers(self) -> None:
+        chunks = split_transcript_by_speaker(
+            "Александр Семенов Стратегия помогает уйти от ручного управления.\n"
+            "SPEAKER_01 А как это применить в команде?",
+            ["Александр Семенов"],
+        )
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual(chunks[0].speaker_name, "Александр Семенов")
+        self.assertEqual(chunks[0].speaker_status, "confirmed")
+        self.assertIsNone(chunks[1].speaker_name)
+        self.assertEqual(chunks[1].speaker_status, "unknown")
+
+    def test_unknown_transcript_stays_anonymous(self) -> None:
+        chunks = split_transcript_by_speaker(
+            "[Неизвестный говорящий] Обсуждались финансовые показатели.",
+            ["Александр Семенов"],
+        )
+        self.assertEqual(chunks[0].speaker_status, "unknown")
+        self.assertIsNone(chunks[0].speaker_name)
+
+    def test_neutralizes_unconfirmed_author_role(self) -> None:
+        self.assertEqual(
+            neutralize_anonymous_authors("Участники согласились проверить гипотезу."),
+            "В общем обсуждении была отмечена договорённость проверить гипотезу.",
+        )
+
+    def test_unconfirmed_speaker_answer_gets_deterministic_refusal(self) -> None:
+        answer = enforce_unconfirmed_speaker_answer(
+            "Семенов подчеркнул важность фокуса. Участники согласились проверить гипотезу.",
+            "Александр Семенов",
+        )
+        self.assertIn("подтвердить, что именно говорил Александр Семенов, нельзя", answer)
+        self.assertNotIn("Семенов подчеркнул", answer)
+        self.assertNotIn("Участники", answer)
+
+
+if __name__ == "__main__":
+    unittest.main()

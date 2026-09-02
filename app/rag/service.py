@@ -8,11 +8,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.db.models import Document, DocumentStatusEnum
-from app.db.repositories import ChunkMatch, ChunkRepository, DocumentRepository
+from app.db.repositories import ChunkMatch, ChunkRepository, DocumentRepository, ProgramLessonRepository
 from app.file_processing.extractors import TextExtractionError, clean_text, extract_text_from_file
 from app.file_processing.ocr_images import OCRImage, extract_pptx_images_for_ocr
 from app.llm.client import LLMClient
 from app.rag.chunking import split_text
+from app.rag.speaker_attribution import (
+    parse_lesson_speakers,
+    requested_speaker,
+    requests_general_discussion,
+    split_transcript_by_speaker,
+)
 
 
 @dataclass(slots=True)
@@ -20,6 +26,8 @@ class RAGAnswerContext:
     chunks: list[ChunkMatch]
     context_text: str
     sources: list[dict[str, Any]]
+    requested_speaker: str | None = None
+    speaker_confirmed: bool | None = None
 
 
 class RAGService:
@@ -32,7 +40,19 @@ class RAGService:
         try:
             file_path = Path(document.stored_path)
             text = await self._extract_text_with_ocr_fallback(file_path)
-            chunks = split_text(text, chunk_size=1200, overlap=150)
+            speaker_chunks = None
+            if self.settings.speaker_rag_enabled and document.material_type == "transcript":
+                lesson = (
+                    await ProgramLessonRepository.get_by_key(session, document.lesson_key)
+                    if document.lesson_key
+                    else None
+                )
+                speaker_chunks = split_transcript_by_speaker(
+                    text,
+                    parse_lesson_speakers(lesson.speaker if lesson else None),
+                    chunk_size=1200,
+                )
+            chunks = speaker_chunks or split_text(text, chunk_size=1200, overlap=150)
             payload: list[dict[str, Any]] = []
 
             for chunk in chunks:
@@ -52,6 +72,8 @@ class RAGService:
                             "material_type": document.material_type,
                             "tags": document.tags or [],
                             "chunk_index": chunk.chunk_index,
+                            "speaker_name": getattr(chunk, "speaker_name", None),
+                            "speaker_status": getattr(chunk, "speaker_status", None),
                         },
                     }
                 )
@@ -172,7 +194,20 @@ class RAGService:
         lesson_key: str | None = None,
         lesson_date: Any | None = None,
         document_ids: list[int] | None = None,
+        use_speaker_rag: bool = False,
     ) -> RAGAnswerContext:
+        requested_name = None
+        speaker_scope = None
+        if use_speaker_rag and lesson_key:
+            lesson = await ProgramLessonRepository.get_by_key(session, lesson_key)
+            requested_name = requested_speaker(
+                question,
+                parse_lesson_speakers(lesson.speaker if lesson else None),
+            )
+            if requested_name:
+                speaker_scope = "confirmed"
+            elif requests_general_discussion(question):
+                speaker_scope = "general"
         question_embedding = await self.llm_client.create_embedding(question)
         matches = await ChunkRepository.search_relevant_by_lesson(
             session=session,
@@ -182,7 +217,40 @@ class RAGService:
             lesson_key=lesson_key,
             lesson_date=lesson_date,
             document_ids=document_ids,
+            speaker_name=requested_name,
+            speaker_scope=speaker_scope,
         )
+
+        attribution_notice = ""
+        speaker_confirmed = bool(matches) if requested_name else None
+        if requested_name and not matches:
+            matches = await ChunkRepository.search_relevant_by_lesson(
+                session=session,
+                question_embedding=question_embedding,
+                user_id=user_id,
+                top_k=self.settings.max_context_chunks,
+                lesson_key=lesson_key,
+                lesson_date=lesson_date,
+                document_ids=document_ids,
+            )
+            attribution_notice = (
+                f"[ОГРАНИЧЕНИЕ АТРИБУЦИИ] В найденных фрагментах нет подтверждённых реплик "
+                f"спикера «{requested_name}». Нельзя отвечать так, будто он произнёс найденные мысли."
+            )
+        elif speaker_scope == "general" and not matches:
+            matches = await ChunkRepository.search_relevant_by_lesson(
+                session=session,
+                question_embedding=question_embedding,
+                user_id=user_id,
+                top_k=self.settings.max_context_chunks,
+                lesson_key=lesson_key,
+                lesson_date=lesson_date,
+                document_ids=document_ids,
+            )
+            attribution_notice = (
+                "[ОГРАНИЧЕНИЕ АТРИБУЦИИ] В занятии пока нет отдельного слоя общего обсуждения. "
+                "Нельзя утверждать, кто именно произнёс найденные мысли."
+            )
 
         selected_chunks: list[ChunkMatch] = []
         total_chars = 0
@@ -202,10 +270,15 @@ class RAGService:
             context_blocks.append(block)
             sources.append(self._source_from_match(match))
 
+        context_text = "\n\n".join(context_blocks)
+        if attribution_notice:
+            context_text = f"{attribution_notice}\n\n{context_text}"
         return RAGAnswerContext(
             chunks=selected_chunks,
-            context_text="\n\n".join(context_blocks),
+            context_text=context_text,
             sources=sources,
+            requested_speaker=requested_name,
+            speaker_confirmed=speaker_confirmed,
         )
 
     async def build_context_for_document_question(
@@ -281,6 +354,10 @@ class RAGService:
         material_type = metadata.get("material_type") or "unknown"
         document_title = metadata.get("document_title") or match.document_title or "unknown"
         parts = [f"Фрагмент {index}", f"type={material_type}", f"document={document_title}"]
+        if metadata.get("speaker_status"):
+            parts.append(f"speaker_status={metadata['speaker_status']}")
+        if metadata.get("speaker_name"):
+            parts.append(f"speaker={metadata['speaker_name']}")
         if extra:
             parts.append(extra)
         return "[" + " | ".join(parts) + "]"
@@ -299,5 +376,7 @@ class RAGService:
             "material_type": metadata.get("material_type"),
             "tags": metadata.get("tags") or [],
             "chunk_index": metadata.get("chunk_index"),
+            "speaker_name": metadata.get("speaker_name"),
+            "speaker_status": metadata.get("speaker_status"),
             "score": round(match.score, 3),
         }
