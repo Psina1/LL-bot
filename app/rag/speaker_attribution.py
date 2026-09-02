@@ -1,0 +1,184 @@
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+from app.rag.chunking import split_text
+
+
+UNKNOWN_SPEAKER_LABELS = (
+    "неизвестный говорящий",
+    "неизвестный спикер",
+    "unknown speaker",
+)
+TECHNICAL_SPEAKER_RE = re.compile(r"\bSPEAKER[_\s-]?\d{1,3}\b", re.IGNORECASE)
+PERSON_QUESTION_RE = re.compile(
+    r"\b(говорил[аи]?|сказал[аи]?|отметил[аи]?|подчеркнул[аи]?|цитат[а-я]*)\b",
+    re.IGNORECASE,
+)
+GENERAL_DISCUSSION_RE = re.compile(
+    r"\b(остальн\w*|друг\w+ участник\w*|общ\w+ обсужден\w*|неизвестн\w+ говорящ\w*)\b",
+    re.IGNORECASE,
+)
+
+
+@dataclass(slots=True)
+class SpeakerChunk:
+    chunk_index: int
+    chunk_text: str
+    speaker_name: str | None
+    speaker_status: str
+
+
+def parse_lesson_speakers(speaker_field: str | None) -> list[str]:
+    if not speaker_field:
+        return []
+    values = re.split(r"[,;\n]+|\s+и\s+", speaker_field)
+    return [value.strip() for value in values if value.strip()]
+
+
+def requested_speaker(question: str, speakers: list[str]) -> str | None:
+    if not PERSON_QUESTION_RE.search(question):
+        return None
+    normalized_question = _normalize(question)
+    for speaker in speakers:
+        tokens = [token for token in _normalize(speaker).split() if len(token) >= 3]
+        if any(token in normalized_question for token in tokens):
+            return speaker
+    return None
+
+
+def requests_general_discussion(question: str) -> bool:
+    return bool(GENERAL_DISCUSSION_RE.search(question))
+
+
+def split_transcript_by_speaker(
+    text: str,
+    known_speakers: list[str],
+    chunk_size: int = 1200,
+) -> list[SpeakerChunk]:
+    labels = _speaker_labels(known_speakers)
+    if not labels:
+        return _unattributed_chunks(text, chunk_size)
+
+    marker_re = re.compile("(" + "|".join(labels) + ")", re.IGNORECASE | re.MULTILINE)
+    matches = list(marker_re.finditer(text))
+    if not matches:
+        return _unattributed_chunks(text, chunk_size)
+
+    chunks: list[SpeakerChunk] = []
+    chunk_index = 0
+    prefix = text[: matches[0].start()].strip()
+    if prefix:
+        chunk_index = _append_segment_chunks(
+            chunks, chunk_index, prefix, None, "unattributed", chunk_size
+        )
+
+    for index, match in enumerate(matches):
+        segment_end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        segment_text = text[match.end() : segment_end].strip()
+        if not segment_text:
+            continue
+        label = match.group(0)
+        speaker_name, status = _classify_label(label, known_speakers)
+        chunk_index = _append_segment_chunks(
+            chunks, chunk_index, segment_text, speaker_name, status, chunk_size
+        )
+    return chunks
+
+
+def anonymous_attribution_notice(requested_name: str) -> str:
+    return (
+        f"В транскрипции голоса не идентифицированы, поэтому подтвердить, "
+        f"что именно говорил {requested_name}, нельзя."
+    )
+
+
+def enforce_unconfirmed_speaker_answer(text: str, requested_name: str) -> str:
+    surname_tokens = [token for token in _normalize(requested_name).split() if len(token) >= 3]
+    speech_re = re.compile(
+        r"\b(говорил[аи]?|сказал[аи]?|отметил[аи]?|подчеркнул[аи]?|обсуждал[аи]?)\b",
+        re.IGNORECASE,
+    )
+    safe_sentences: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
+        normalized = _normalize(sentence)
+        if speech_re.search(sentence) and any(token in normalized for token in surname_tokens):
+            continue
+        safe_sentences.append(sentence)
+    remainder = neutralize_anonymous_authors(" ".join(safe_sentences)).strip()
+    notice = anonymous_attribution_notice(requested_name)
+    if remainder.casefold().startswith(notice.casefold()):
+        return remainder
+    if not remainder:
+        return notice
+    return f"{notice}\n\nВ общем обсуждении:\n{remainder}"
+
+
+def neutralize_anonymous_authors(text: str) -> str:
+    replacements = (
+        (r"\b(?:Участники|Коллеги|Эксперты)\s+согласились", "В общем обсуждении была отмечена договорённость"),
+        (r"\b(?:Участники|Коллеги|Эксперты)\s+(?:говорили|обсуждали)", "В общем обсуждении рассматривалось"),
+        (r"\b(?:Участники|Коллеги|Эксперты)\s+(?:отметили|подчеркнули)", "В общем обсуждении отмечалось"),
+    )
+    result = text
+    for pattern, replacement in replacements:
+        result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+    return result
+
+
+def _speaker_labels(known_speakers: list[str]) -> list[str]:
+    labels = [
+        r"^[ \t]*\[?Неизвестный говорящий\]?",
+        r"^[ \t]*\[?Неизвестный спикер\]?",
+        rf"^[ \t]*{TECHNICAL_SPEAKER_RE.pattern}",
+    ]
+    labels.extend(
+        rf"^[ \t]*{re.escape(speaker)}(?=\s|$)"
+        for speaker in known_speakers
+        if len(speaker.strip()) >= 3
+    )
+    return labels
+
+
+def _classify_label(label: str, known_speakers: list[str]) -> tuple[str | None, str]:
+    normalized = _normalize(label)
+    if any(value in normalized for value in UNKNOWN_SPEAKER_LABELS) or TECHNICAL_SPEAKER_RE.search(label):
+        return None, "unknown"
+    for speaker in known_speakers:
+        if _normalize(speaker) == normalized:
+            return speaker, "confirmed"
+    return None, "unattributed"
+
+
+def _append_segment_chunks(
+    output: list[SpeakerChunk],
+    start_index: int,
+    text: str,
+    speaker_name: str | None,
+    speaker_status: str,
+    chunk_size: int,
+) -> int:
+    index = start_index
+    for chunk in split_text(text, chunk_size=chunk_size, overlap=0):
+        output.append(
+            SpeakerChunk(
+                chunk_index=index,
+                chunk_text=chunk.chunk_text,
+                speaker_name=speaker_name,
+                speaker_status=speaker_status,
+            )
+        )
+        index += 1
+    return index
+
+
+def _unattributed_chunks(text: str, chunk_size: int) -> list[SpeakerChunk]:
+    return [
+        SpeakerChunk(chunk.chunk_index, chunk.chunk_text, None, "unattributed")
+        for chunk in split_text(text, chunk_size=chunk_size, overlap=0)
+    ]
+
+
+def _normalize(value: str) -> str:
+    return re.sub(r"[^a-zа-яё0-9]+", " ", value.casefold()).strip()
