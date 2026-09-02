@@ -28,6 +28,22 @@ class SpeakerAttributionTests(unittest.TestCase):
             "С. Сафронов",
         )
 
+    def test_requested_speaker_matches_inflected_surname(self) -> None:
+        self.assertEqual(
+            requested_speaker(
+                "Какие основные тезисы Семенова прозвучали на занятии?",
+                ["Александр Семенов"],
+            ),
+            "Александр Семенов",
+        )
+        self.assertEqual(
+            requested_speaker(
+                "Что было важным в выступлении Макаровой?",
+                ["Ю. Макарова"],
+            ),
+            "Ю. Макарова",
+        )
+
     def test_detects_question_about_other_speakers(self) -> None:
         self.assertTrue(requests_general_discussion("О чем говорили остальные участники?"))
         self.assertTrue(requests_general_discussion("Какие мысли прозвучали в общем обсуждении?"))
