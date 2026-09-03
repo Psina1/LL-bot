@@ -22,6 +22,12 @@ class SpeakerAttributionTests(unittest.TestCase):
             ["Ю. Макарова", "С. Сафронов"],
         )
 
+    def test_parse_adjacent_surname_initial_speakers(self) -> None:
+        self.assertEqual(
+            parse_lesson_speakers("Берштейн Т. Рахманов А."),
+            ["Берштейн Т.", "Рахманов А."],
+        )
+
     def test_requested_speaker_matches_surname(self) -> None:
         self.assertEqual(
             requested_speaker(
@@ -118,6 +124,28 @@ class SpeakerAttributionTests(unittest.TestCase):
         )
         self.assertEqual(chunks[0].speaker_name, "Семенов А.")
         self.assertEqual(chunks[0].speaker_status, "confirmed")
+
+    def test_zoom_colon_labels_classify_known_and_other_speakers(self) -> None:
+        chunks = split_transcript_by_speaker(
+            "Sergey Safronov: Стратегия связана с финансовыми решениями.\n"
+            "Анна Усикова: Задаёт организационный вопрос.",
+            ["С. Сафронов"],
+        )
+        self.assertEqual(chunks[0].speaker_name, "С. Сафронов")
+        self.assertEqual(chunks[0].speaker_status, "confirmed")
+        self.assertIsNone(chunks[1].speaker_name)
+        self.assertEqual(chunks[1].speaker_status, "unknown")
+
+    def test_timestamp_labels_classify_known_and_other_speakers(self) -> None:
+        chunks = split_transcript_by_speaker(
+            "[00:00:03] Татьяна Кульбякина Открывает встречу.\n"
+            "[00:01:12] Александр Рахманов Рассказывает о консалтинге.",
+            ["Рахманов А."],
+        )
+        self.assertIsNone(chunks[0].speaker_name)
+        self.assertEqual(chunks[0].speaker_status, "unknown")
+        self.assertEqual(chunks[1].speaker_name, "Рахманов А.")
+        self.assertEqual(chunks[1].speaker_status, "confirmed")
 
     def test_neutralizes_unconfirmed_author_role(self) -> None:
         self.assertEqual(
