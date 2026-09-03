@@ -12,6 +12,17 @@ UNKNOWN_SPEAKER_LABELS = (
     "unknown speaker",
 )
 TECHNICAL_SPEAKER_RE = re.compile(r"\bSPEAKER[_\s-]?\d{1,3}\b", re.IGNORECASE)
+TIMESTAMP_PREFIX = r"(?:\[\d{1,2}:\d{2}(?::\d{2})?\][ \t]*)?"
+GENERIC_COLON_SPEAKER = (
+    rf"^[ \t]*{TIMESTAMP_PREFIX}"
+    r"(?!(?:Встреча|Дата|Участники|Транскрипция):)"
+    r"[A-ZА-ЯЁ][A-Za-zА-ЯЁа-яё0-9 ._()'\-]{1,79}:[ \t]*"
+)
+GENERIC_TIMESTAMP_SPEAKER = (
+    r"^[ \t]*\[\d{1,2}:\d{2}(?::\d{2})?\][ \t]*"
+    r"[A-ZА-ЯЁ][A-Za-zА-ЯЁа-яё'\-]+[ \t]+"
+    r"[A-ZА-ЯЁ][A-Za-zА-ЯЁа-яё'\-]+[ \t]+"
+)
 PERSON_QUESTION_RE = re.compile(
     r"\b(говорил[аи]?|сказал[аи]?|рассказывал[аи]?|обсуждал[аи]?|отметил[аи]?|"
     r"подчеркнул[аи]?|цитат[а-я]*|тезис[а-я]*|мысл[а-я]*|выступлен[а-я]*)\b",
@@ -38,8 +49,12 @@ class SpeakerChunk:
 def parse_lesson_speakers(speaker_field: str | None) -> list[str]:
     if not speaker_field:
         return []
-    values = re.split(r"[,;\n]+|\s+и\s+", speaker_field)
-    return [value.strip() for value in values if value.strip()]
+    values = [value.strip() for value in re.split(r"[,;\n]+|\s+и\s+", speaker_field) if value.strip()]
+    if len(values) == 1:
+        surname_initial_pairs = re.findall(r"[А-ЯЁ][а-яё-]+\s+[А-ЯЁ]\.", values[0])
+        if len(surname_initial_pairs) > 1:
+            return surname_initial_pairs
+    return values
 
 
 def requested_speaker(question: str, speakers: list[str]) -> str | None:
@@ -213,21 +228,22 @@ def neutralize_anonymous_authors(text: str) -> str:
 
 def _speaker_labels(known_speakers: list[str]) -> list[str]:
     labels = [
-        r"^[ \t]*\[?Неизвестный говорящий\]?",
-        r"^[ \t]*\[?Неизвестный спикер\]?",
-        rf"^[ \t]*{TECHNICAL_SPEAKER_RE.pattern}",
+        rf"^[ \t]*{TIMESTAMP_PREFIX}\[?Неизвестный говорящий\]?:?[ \t]*",
+        rf"^[ \t]*{TIMESTAMP_PREFIX}\[?Неизвестный спикер\]?:?[ \t]*",
+        rf"^[ \t]*{TIMESTAMP_PREFIX}{TECHNICAL_SPEAKER_RE.pattern}:?[ \t]*",
     ]
     for speaker in known_speakers:
         if len(speaker.strip()) < 3:
             continue
-        labels.append(rf"^[ \t]*{re.escape(speaker)}(?=\s|$)")
+        labels.append(rf"^[ \t]*{TIMESTAMP_PREFIX}{re.escape(speaker)}(?=[ \t:]|$):?[ \t]*")
         surname = _speaker_surname(speaker)
         if surname:
             full_word = r"[А-ЯЁ][а-яё-]+"
             labels.append(
-                rf"^[ \t]*(?:{full_word}[ \t]+{re.escape(surname)}|"
-                rf"{re.escape(surname)}[ \t]+{full_word})(?=\s|$)"
+                rf"^[ \t]*{TIMESTAMP_PREFIX}(?:{full_word}[ \t]+{re.escape(surname)}|"
+                rf"{re.escape(surname)}[ \t]+{full_word})(?=[ \t:]|$):?[ \t]*"
             )
+    labels.extend((GENERIC_COLON_SPEAKER, GENERIC_TIMESTAMP_SPEAKER))
     return labels
 
 
@@ -239,8 +255,14 @@ def _classify_label(label: str, known_speakers: list[str]) -> tuple[str | None, 
         if _normalize(speaker) == normalized:
             return speaker, "confirmed"
         surname = _speaker_surname(speaker)
-        if surname and _normalize(surname) in normalized.split():
-            return speaker, "confirmed"
+        if surname:
+            normalized_surname = _normalize(surname)
+            normalized_tokens = normalized.split()
+            latin_surname = _latinize(normalized_surname)
+            if normalized_surname in normalized_tokens or latin_surname in normalized_tokens:
+                return speaker, "confirmed"
+    if ":" in label or re.match(r"^[ \t]*\[\d{1,2}:\d{2}", label):
+        return None, "unknown"
     return None, "unattributed"
 
 
@@ -306,3 +328,14 @@ def _matches_inflected_name(catalog_token: str, question_token: str) -> bool:
     # "Семенов" -> "Семенова", "Макарова" -> "Макаровой".
     stem = catalog_token[:-1] if catalog_token.endswith(("а", "я")) else catalog_token
     return len(stem) >= 5 and question_token.startswith(stem)
+
+
+def _latinize(value: str) -> str:
+    replacements = {
+        "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+        "ж": "zh", "з": "z", "и": "i", "й": "i", "к": "k", "л": "l", "м": "m",
+        "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+        "ф": "f", "х": "kh", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "shch",
+        "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "iu", "я": "ia",
+    }
+    return "".join(replacements.get(char, char) for char in value.casefold())
