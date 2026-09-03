@@ -59,13 +59,28 @@ class SpeakerAttributionTests(unittest.TestCase):
 
     def test_verified_quotes_are_copied_from_chunks(self) -> None:
         chunks = [
-            "Стратегия помогает руководителю уйти от ручного управления. "
+            "Стратегия помогает руководителю уйти от ручного управления.",
             "Для этого необходимо договориться о фокусе команды.",
         ]
-        answer = verified_quote_answer(chunks, "Александр Семенов")
+        answer = verified_quote_answer(chunks, "Александр Семенов", "Приведи цитаты Семенова")
         quoted = re.findall(r"«([^»]+)»", answer)
         self.assertEqual(len(quoted), 2)
-        self.assertTrue(all(quote in chunks[0] for quote in quoted))
+        self.assertTrue(all(any(quote in chunk for chunk in chunks) for quote in quoted))
+
+    def test_verified_quotes_prefer_question_topic_and_distinct_chunks(self) -> None:
+        chunks = [
+            "Стратегия требует осознанного выбора и отказа от лишних направлений. "
+            "Мы также обсуждали встречу с коллегами.",
+            "Для работающей стратегии необходимо определить измеримые цели.",
+        ]
+        answer = verified_quote_answer(
+            chunks,
+            "Александр Семенов",
+            "Приведи цитаты Семенова о стратегии",
+        )
+        quoted = re.findall(r"«([^»]+)»", answer)
+        self.assertEqual(len(quoted), 2)
+        self.assertTrue(all("стратег" in quote.casefold() for quote in quoted))
 
     def test_transcript_chunks_do_not_cross_speakers(self) -> None:
         chunks = split_transcript_by_speaker(

@@ -214,6 +214,7 @@ class ChatService:
             answer_text = verified_quote_answer(
                 [chunk.chunk_text for chunk in rag_context.chunks],
                 rag_context.requested_speaker,
+                question=question,
             )
         answer_text = self._ensure_sources_block(answer_text, sources)
         message = await MessageRepository.create(
