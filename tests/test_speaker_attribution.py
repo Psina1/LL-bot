@@ -63,7 +63,7 @@ class SpeakerAttributionTests(unittest.TestCase):
             "Для этого необходимо договориться о фокусе команды.",
         ]
         answer = verified_quote_answer(chunks, "Александр Семенов", "Приведи цитаты Семенова")
-        quoted = re.findall(r"«([^»]+)»", answer)
+        quoted = re.findall(r"\d+\. «([^»]+)»", answer)
         self.assertEqual(len(quoted), 2)
         self.assertTrue(all(any(quote in chunk for chunk in chunks) for quote in quoted))
 
@@ -78,7 +78,7 @@ class SpeakerAttributionTests(unittest.TestCase):
             "Александр Семенов",
             "Приведи цитаты Семенова о стратегии",
         )
-        quoted = re.findall(r"«([^»]+)»", answer)
+        quoted = re.findall(r"\d+\. «([^»]+)»", answer)
         self.assertEqual(len(quoted), 2)
         self.assertTrue(all("стратег" in quote.casefold() for quote in quoted))
 
