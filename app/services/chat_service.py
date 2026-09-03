@@ -13,7 +13,12 @@ from app.db.repositories import BotTextRepository, ErrorRepository, MessageRepos
 from app.llm.client import LLMClient
 from app.llm.prompts import SYSTEM_PROMPT
 from app.rag.service import RAGService
-from app.rag.speaker_attribution import enforce_unconfirmed_speaker_answer, neutralize_anonymous_authors
+from app.rag.speaker_attribution import (
+    enforce_unconfirmed_speaker_answer,
+    neutralize_anonymous_authors,
+    requests_direct_quotes,
+    verified_quote_answer,
+)
 
 
 @dataclass(slots=True)
@@ -198,6 +203,16 @@ class ChatService:
         if speaker_rag_active and rag_context.requested_speaker and rag_context.speaker_confirmed is False:
             answer_text = enforce_unconfirmed_speaker_answer(
                 answer_text,
+                rag_context.requested_speaker,
+            )
+        elif (
+            speaker_rag_active
+            and rag_context.requested_speaker
+            and rag_context.speaker_confirmed
+            and requests_direct_quotes(question)
+        ):
+            answer_text = verified_quote_answer(
+                [chunk.chunk_text for chunk in rag_context.chunks],
                 rag_context.requested_speaker,
             )
         answer_text = self._ensure_sources_block(answer_text, sources)

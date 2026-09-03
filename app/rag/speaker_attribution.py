@@ -21,6 +21,10 @@ GENERAL_DISCUSSION_RE = re.compile(
     r"\b(остальн\w*|друг\w+ участник\w*|общ\w+ обсужден\w*|неизвестн\w+ говорящ\w*)\b",
     re.IGNORECASE,
 )
+DIRECT_QUOTE_RE = re.compile(
+    r"\b(цитат[а-я]*|дословн[а-я]*|точн[а-я]+ формулировк[а-я]*)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True)
@@ -55,6 +59,43 @@ def requested_speaker(question: str, speakers: list[str]) -> str | None:
 
 def requests_general_discussion(question: str) -> bool:
     return bool(GENERAL_DISCUSSION_RE.search(question))
+
+
+def requests_direct_quotes(question: str) -> bool:
+    return bool(DIRECT_QUOTE_RE.search(question))
+
+
+def verified_quote_answer(
+    chunk_texts: list[str],
+    requested_name: str,
+    max_quotes: int = 5,
+) -> str:
+    quotes: list[str] = []
+    seen: set[str] = set()
+    for chunk_text in chunk_texts:
+        for sentence in re.split(r"(?<=[.!?])\s+", chunk_text.strip()):
+            sentence = sentence.strip()
+            normalized = _normalize(sentence)
+            if not 35 <= len(sentence) <= 500 or normalized in seen:
+                continue
+            seen.add(normalized)
+            quotes.append(sentence)
+            if len(quotes) >= max_quotes:
+                break
+        if len(quotes) >= max_quotes:
+            break
+
+    if not quotes:
+        return (
+            f"В подтверждённых фрагментах речи {requested_name} не нашлось цельных фраз, "
+            "которые можно безопасно привести дословно."
+        )
+
+    rendered_quotes = "\n\n".join(f"{index}. «{quote}»" for index, quote in enumerate(quotes, start=1))
+    return (
+        f"Дословные фрагменты речи {requested_name} из автоматической транскрипции "
+        f"(без таймкодов):\n\n{rendered_quotes}"
+    )
 
 
 def split_transcript_by_speaker(
