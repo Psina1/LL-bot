@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 
 from app.rag.speaker_attribution import (
@@ -7,8 +8,10 @@ from app.rag.speaker_attribution import (
     neutralize_anonymous_authors,
     parse_lesson_speakers,
     requested_speaker,
+    requests_direct_quotes,
     requests_general_discussion,
     split_transcript_by_speaker,
+    verified_quote_answer,
 )
 
 
@@ -48,6 +51,21 @@ class SpeakerAttributionTests(unittest.TestCase):
         self.assertTrue(requests_general_discussion("О чем говорили остальные участники?"))
         self.assertTrue(requests_general_discussion("Какие мысли прозвучали в общем обсуждении?"))
         self.assertFalse(requests_general_discussion("О чем говорил Александр Семенов?"))
+
+    def test_detects_direct_quote_request(self) -> None:
+        self.assertTrue(requests_direct_quotes("Приведи подтвержденные цитаты Семенова"))
+        self.assertTrue(requests_direct_quotes("Как он сформулировал это дословно?"))
+        self.assertFalse(requests_direct_quotes("Перескажи тезисы Семенова"))
+
+    def test_verified_quotes_are_copied_from_chunks(self) -> None:
+        chunks = [
+            "Стратегия помогает руководителю уйти от ручного управления. "
+            "Для этого необходимо договориться о фокусе команды.",
+        ]
+        answer = verified_quote_answer(chunks, "Александр Семенов")
+        quoted = re.findall(r"«([^»]+)»", answer)
+        self.assertEqual(len(quoted), 2)
+        self.assertTrue(all(quote in chunks[0] for quote in quoted))
 
     def test_transcript_chunks_do_not_cross_speakers(self) -> None:
         chunks = split_transcript_by_speaker(
