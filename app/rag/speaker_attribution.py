@@ -107,13 +107,13 @@ def verified_quote_answer(
 
     if not quotes:
         return (
-            f"В подтверждённых фрагментах речи {requested_name} не нашлось цельных фраз, "
+            f"В подтверждённых фрагментах спикера «{requested_name}» не нашлось цельных фраз, "
             "которые можно безопасно привести дословно."
         )
 
     rendered_quotes = "\n\n".join(f"{index}. «{quote}»" for index, quote in enumerate(quotes, start=1))
     return (
-        f"Дословные фрагменты речи {requested_name} из автоматической транскрипции "
+        f"Дословные фрагменты спикера «{requested_name}» из автоматической транскрипции "
         f"(без таймкодов):\n\n{rendered_quotes}"
     )
 
