@@ -68,20 +68,40 @@ def requests_direct_quotes(question: str) -> bool:
 def verified_quote_answer(
     chunk_texts: list[str],
     requested_name: str,
+    question: str = "",
     max_quotes: int = 5,
 ) -> str:
-    quotes: list[str] = []
+    candidates: list[tuple[int, int, int, str]] = []
     seen: set[str] = set()
-    for chunk_text in chunk_texts:
-        for sentence in re.split(r"(?<=[.!?])\s+", chunk_text.strip()):
+    keywords = _quote_keywords(question, requested_name)
+    for chunk_rank, chunk_text in enumerate(chunk_texts):
+        for sentence_rank, sentence in enumerate(re.split(r"(?<=[.!?])\s+", chunk_text.strip())):
             sentence = sentence.strip()
             normalized = _normalize(sentence)
-            if not 35 <= len(sentence) <= 500 or normalized in seen:
+            if (
+                not 35 <= len(sentence) <= 500
+                or normalized in seen
+                or sentence.startswith("...")
+            ):
                 continue
             seen.add(normalized)
-            quotes.append(sentence)
-            if len(quotes) >= max_quotes:
-                break
+            relevance = sum(
+                1
+                for keyword in keywords
+                if any(token.startswith(keyword) for token in normalized.split())
+            )
+            candidates.append((-relevance, chunk_rank, sentence_rank, sentence))
+
+    candidates.sort()
+    quotes: list[str] = []
+    used_chunks: set[int] = set()
+    for negative_relevance, chunk_rank, _, sentence in candidates:
+        if chunk_rank in used_chunks:
+            continue
+        if keywords and -negative_relevance == 0 and quotes:
+            continue
+        used_chunks.add(chunk_rank)
+        quotes.append(sentence)
         if len(quotes) >= max_quotes:
             break
 
@@ -96,6 +116,22 @@ def verified_quote_answer(
         f"Дословные фрагменты речи {requested_name} из автоматической транскрипции "
         f"(без таймкодов):\n\n{rendered_quotes}"
     )
+
+
+def _quote_keywords(question: str, requested_name: str) -> set[str]:
+    ignored = {
+        "приведи", "подтвержденные", "подтверждённые", "цитаты", "цитату",
+        "дословно", "точная", "точную", "формулировка", "формулировку",
+    }
+    name_tokens = [token for token in _normalize(requested_name).split() if len(token) >= 3]
+    keywords: set[str] = set()
+    for token in _normalize(question).split():
+        if len(token) < 5 or token in ignored:
+            continue
+        if any(_matches_inflected_name(name_token, token) for name_token in name_tokens):
+            continue
+        keywords.add(token[:7])
+    return keywords
 
 
 def split_transcript_by_speaker(
