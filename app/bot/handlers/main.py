@@ -127,6 +127,7 @@ from app.services.lesson_conversation import (
     asks_for_speaker_lesson_list,
     has_fresh_lesson_context,
     lesson_number_reference,
+    match_known_speaker_marker,
     uses_remembered_lesson_context,
 )
 from app.services.question_routing import route_direct_question
@@ -2004,7 +2005,6 @@ def build_main_router(container: AppContainer) -> Router:
         return True
 
     def extract_speaker_marker(text_value: str | None) -> str | None:
-        text = (text_value or "").lower()
         speaker_markers = [
             "рахманов",
             "берштейн",
@@ -2017,10 +2017,7 @@ def build_main_router(container: AppContainer) -> Router:
             "макарова",
             "карлик",
         ]
-        for marker in speaker_markers:
-            if marker in text:
-                return marker.replace("ё", "е")
-        return None
+        return match_known_speaker_marker(text_value, speaker_markers)
 
     def has_lesson_context_words(text_value: str | None) -> bool:
         text = (text_value or "").lower()
