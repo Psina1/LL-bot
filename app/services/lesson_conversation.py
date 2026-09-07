@@ -1,6 +1,29 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
+from typing import Mapping
+
+
+LESSON_CONTEXT_TTL = timedelta(minutes=45)
+
+
+def has_fresh_lesson_context(
+    data: Mapping[str, object],
+    *,
+    now: datetime | None = None,
+) -> bool:
+    raw_timestamp = data.get("conversation_lesson_context_at")
+    if not data.get("conversation_lesson_key") or not isinstance(raw_timestamp, str):
+        return False
+    try:
+        timestamp = datetime.fromisoformat(raw_timestamp)
+    except ValueError:
+        return False
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    age = (now or datetime.now(timezone.utc)) - timestamp
+    return timedelta(0) <= age <= LESSON_CONTEXT_TTL
 
 
 def asks_for_speaker_lesson_list(text_value: str | None) -> bool:

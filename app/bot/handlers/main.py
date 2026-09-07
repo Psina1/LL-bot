@@ -125,6 +125,7 @@ from app.services.director_dashboard import is_director_dashboard_demo_user
 from app.services.document_service import FileValidationError, SavedUpload
 from app.services.lesson_conversation import (
     asks_for_speaker_lesson_list,
+    has_fresh_lesson_context,
     lesson_number_reference,
     uses_remembered_lesson_context,
 )
@@ -2061,6 +2062,7 @@ def build_main_router(container: AppContainer) -> Router:
             conversation_lesson_key=lesson.lesson_key,
             conversation_lesson_date=lesson.date_start.isoformat() if lesson.date_start else None,
             conversation_lesson_title=lesson.lesson_title,
+            conversation_lesson_context_at=datetime.now(timezone.utc).isoformat(),
             conversation_speaker_hint=normalized_hint,
             pending_speaker_hint=None,
         )
@@ -2085,6 +2087,8 @@ def build_main_router(container: AppContainer) -> Router:
         if not uses_remembered_lesson_context(text_value):
             return False
         state_data = await state.get_data()
+        if not has_fresh_lesson_context(state_data):
+            return False
         lesson_key = state_data.get("conversation_lesson_key")
         if not lesson_key:
             return False
