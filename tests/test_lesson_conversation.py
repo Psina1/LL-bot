@@ -4,6 +4,7 @@ from app.services.lesson_conversation import (
     asks_for_speaker_lesson_list,
     has_fresh_lesson_context,
     lesson_number_reference,
+    looks_like_lesson_overview,
     match_known_speaker_marker,
     uses_remembered_lesson_context,
 )
@@ -51,3 +52,9 @@ def test_speaker_marker_tolerates_small_typos() -> None:
     assert match_known_speaker_marker("что говорила макарва", markers) == "макарова"
     assert match_known_speaker_marker("о чем сафрнов рассказывал", markers) == "сафронов"
     assert match_known_speaker_marker("когда следующее занятие", markers) is None
+
+
+def test_colloquial_overview_request_is_detected() -> None:
+    assert looks_like_lesson_overview("напомни чо было про тайм ту кеш")
+    assert looks_like_lesson_overview("шо было на прошлом занятии")
+    assert not looks_like_lesson_overview("дай видео занятия")

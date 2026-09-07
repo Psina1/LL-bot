@@ -109,3 +109,23 @@ def uses_remembered_lesson_context(text_value: str | None) -> bool:
     has_pronoun = bool(re.search(r"\b(он|она|они|спикер)\b", text))
     has_content_request = any(stem in text for stem in ("о чем", "о чом", "говор", "расказ", "рассказ", "тезис", "мысл"))
     return has_pronoun and has_content_request
+
+
+def looks_like_lesson_overview(text_value: str | None) -> bool:
+    text = (text_value or "").casefold().replace("ё", "е")
+    return any(
+        marker in text
+        for marker in (
+            "что было",
+            "чо было",
+            "шо было",
+            "что там",
+            "расскажи",
+            "напомни",
+            "о чем",
+            "о чом",
+            "про что",
+            "что обсуждали",
+            "что проходили",
+        )
+    )

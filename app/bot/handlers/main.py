@@ -127,6 +127,7 @@ from app.services.lesson_conversation import (
     asks_for_speaker_lesson_list,
     has_fresh_lesson_context,
     lesson_number_reference,
+    looks_like_lesson_overview,
     match_known_speaker_marker,
     uses_remembered_lesson_context,
 )
@@ -1408,7 +1409,7 @@ def build_main_router(container: AppContainer) -> Router:
 
     DIRECT_LESSON_MARKERS = [
         ("s1_b1_kickoff", ["кикоф", "kick-off", "kickoff"]),
-        ("s1_b2_l1", ["time to cash", "тайм ту кэш", "логика консалтингового бизнеса", "экспертизу в выручку", "cash"]),
+        ("s1_b2_l1", ["time to cash", "тайм ту кэш", "тайм ту кеш", "логика консалтингового бизнеса", "экспертизу в выручку", "cash"]),
         ("s1_b2_l2", ["организационные модели", "организационн", "зрелый консалтинговый бизнес", "берштейн"]),
         ("s1_b2_l3", ["практикум"]),
         ("s1_b2_l4", ["итоговая сборка блока", "итоговая сборка"]),
@@ -2036,8 +2037,7 @@ def build_main_router(container: AppContainer) -> Router:
         return None
 
     def wants_lesson_overview(text_value: str | None) -> bool:
-        text = (text_value or "").lower()
-        return any(marker in text for marker in ["что было", "расскажи", "расскажите", "о чем", "про что", "что обсуждали", "что проходили"])
+        return looks_like_lesson_overview(text_value)
 
     def wants_lesson_card_request(text_value: str | None) -> bool:
         text = (text_value or "").lower()
@@ -2231,7 +2231,7 @@ def build_main_router(container: AppContainer) -> Router:
             return True
 
         direct_lesson_key = direct_lesson_key_from_text(text)
-        if direct_lesson_key and has_lesson_context_words(text) and wants_lesson_overview(text):
+        if direct_lesson_key and wants_lesson_overview(text):
             async with SessionLocal() as session:
                 lesson = await ProgramLessonRepository.get_by_key(session, direct_lesson_key)
             if lesson is not None:
