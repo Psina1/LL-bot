@@ -13,6 +13,7 @@ from app.file_processing.extractors import TextExtractionError, clean_text, extr
 from app.file_processing.ocr_images import OCRImage, extract_pptx_images_for_ocr
 from app.llm.client import LLMClient
 from app.rag.chunking import split_text
+from app.rag.query_normalization import normalize_rag_query
 from app.rag.speaker_attribution import (
     parse_lesson_speakers,
     requested_speaker,
@@ -160,7 +161,7 @@ class RAGService:
         question: str,
         user_id: int,
     ) -> RAGAnswerContext:
-        question_embedding = await self.llm_client.create_embedding(question)
+        question_embedding = await self.llm_client.create_embedding(normalize_rag_query(question))
         matches = await ChunkRepository.search_relevant(
             session=session,
             question_embedding=question_embedding,
@@ -214,7 +215,7 @@ class RAGService:
                 speaker_scope = "confirmed"
             elif requests_general_discussion(question):
                 speaker_scope = "general"
-        question_embedding = await self.llm_client.create_embedding(question)
+        question_embedding = await self.llm_client.create_embedding(normalize_rag_query(question))
         matches = await ChunkRepository.search_relevant_by_lesson(
             session=session,
             question_embedding=question_embedding,
@@ -306,7 +307,7 @@ class RAGService:
         user_id: int,
         document_id: int,
     ) -> RAGAnswerContext:
-        question_embedding = await self.llm_client.create_embedding(question)
+        question_embedding = await self.llm_client.create_embedding(normalize_rag_query(question))
         matches = await ChunkRepository.search_relevant_in_document(
             session=session,
             question_embedding=question_embedding,
