@@ -1635,7 +1635,7 @@ def build_main_router(container: AppContainer) -> Router:
         lesson_date: date | None = None,
         document_ids: list[int] | None = None,
         telegram_user=None,
-        show_followup_menu: bool = True,
+        show_followup_menu: bool = False,
         speaker_hint: str | None = None,
     ) -> None:
         user, session = await get_user_and_session(message, telegram_user=telegram_user)
