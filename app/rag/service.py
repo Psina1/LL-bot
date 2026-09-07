@@ -207,7 +207,7 @@ class RAGService:
             )
             if not requested_name and requested_speaker_hint:
                 requested_name = requested_speaker(
-                    requested_speaker_hint,
+                    f"что говорил {requested_speaker_hint}",
                     parse_lesson_speakers(lesson.speaker if lesson else None),
                 )
             if requested_name:
