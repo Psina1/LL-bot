@@ -60,6 +60,7 @@ class SpeakerAttributionTests(unittest.TestCase):
 
     def test_detects_direct_quote_request(self) -> None:
         self.assertTrue(requests_direct_quotes("Приведи подтвержденные цитаты Семенова"))
+        self.assertTrue(requests_direct_quotes("Дай цетаты плиз"))
         self.assertTrue(requests_direct_quotes("Как он сформулировал это дословно?"))
         self.assertFalse(requests_direct_quotes("Перескажи тезисы Семенова"))
 

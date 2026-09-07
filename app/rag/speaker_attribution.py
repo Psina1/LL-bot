@@ -33,7 +33,7 @@ GENERAL_DISCUSSION_RE = re.compile(
     re.IGNORECASE,
 )
 DIRECT_QUOTE_RE = re.compile(
-    r"\b(цитат[а-я]*|дословн[а-я]*|точн[а-я]+ формулировк[а-я]*)\b",
+    r"\b(ц[ие]тат[а-я]*|дословн[а-я]*|точн[а-я]+ формулировк[а-я]*)\b",
     re.IGNORECASE,
 )
 
