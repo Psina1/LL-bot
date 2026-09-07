@@ -97,6 +97,7 @@ class ChatService:
         lesson_key: str | None = None,
         lesson_date: Any | None = None,
         document_ids: list[int] | None = None,
+        speaker_hint: str | None = None,
     ) -> ChatAnswer:
         user_id = user.id
         project_context = user.project_context
@@ -118,6 +119,7 @@ class ChatService:
                         lesson_date=lesson_date,
                         document_ids=document_ids,
                         use_speaker_rag=speaker_rag_active,
+                        requested_speaker_hint=speaker_hint,
                     )
                 else:
                     rag_context = await self.rag_service.build_context_for_question(

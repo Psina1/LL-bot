@@ -195,6 +195,7 @@ class RAGService:
         lesson_date: Any | None = None,
         document_ids: list[int] | None = None,
         use_speaker_rag: bool = False,
+        requested_speaker_hint: str | None = None,
     ) -> RAGAnswerContext:
         requested_name = None
         speaker_scope = None
@@ -204,6 +205,11 @@ class RAGService:
                 question,
                 parse_lesson_speakers(lesson.speaker if lesson else None),
             )
+            if not requested_name and requested_speaker_hint:
+                requested_name = requested_speaker(
+                    requested_speaker_hint,
+                    parse_lesson_speakers(lesson.speaker if lesson else None),
+                )
             if requested_name:
                 speaker_scope = "confirmed"
             elif requests_general_discussion(question):
