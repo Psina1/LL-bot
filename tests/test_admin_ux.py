@@ -6,7 +6,14 @@ from types import SimpleNamespace
 
 from app.bot.handlers.lesson_feedback import build_lesson_display_numbers, second_score_question_text
 from app.bot.keyboards.lesson_feedback import admin_feedback_lessons_keyboard
-from app.bot.keyboards.reply import ADMIN_MENU_BUTTONS, all_reply_button_labels, main_menu_keyboard
+from app.bot.keyboards.reply import (
+    ADMIN_MATERIALS_BUTTONS,
+    ADMIN_MENU_BUTTONS,
+    all_reply_button_labels,
+    main_menu_keyboard,
+    materials_program_keyboard,
+)
+from app.db.init_db import DEFAULT_PROGRAM_LESSONS
 
 
 class AdminUxTests(unittest.TestCase):
@@ -66,6 +73,25 @@ class AdminUxTests(unittest.TestCase):
         self.assertIn("Добавить видео/подкаст", labels)
         self.assertIn("Настройки автоуведомлений", labels)
         self.assertIn("Контакты поддержки", labels)
+
+    def test_main_menu_encourages_free_text_instead_of_ask_button(self) -> None:
+        labels = [[button.text for button in row] for row in main_menu_keyboard().keyboard]
+        self.assertNotIn("Задать вопрос", [label for row in labels for label in row])
+
+    def test_materials_menu_keeps_only_short_fallback_navigation(self) -> None:
+        labels = [row[0].text for row in materials_program_keyboard().inline_keyboard]
+        self.assertEqual(labels, ["Последнее занятие", "Выбрать занятие", "Главное меню"])
+
+    def test_admin_materials_menu_uses_bundle_flow(self) -> None:
+        labels = [button.text for row in ADMIN_MATERIALS_BUTTONS for button in row]
+        self.assertIn("Загрузить комплект занятия", labels)
+        self.assertIn("Чеклист занятия", labels)
+        self.assertNotIn("Добавить материал", labels)
+
+    def test_final_lesson_date_is_august_25(self) -> None:
+        final_lesson = next(item for item in DEFAULT_PROGRAM_LESSONS if item["lesson_key"] == "s1_b5_final")
+        self.assertEqual(final_lesson["date_start"], date(2026, 8, 25))
+        self.assertIsNone(final_lesson["date_end"])
 
     def test_feedback_numbers_follow_full_program_order(self) -> None:
         numbers = build_lesson_display_numbers(self.lessons)

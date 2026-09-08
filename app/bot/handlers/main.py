@@ -6,6 +6,7 @@ import random
 import re
 import time
 import csv
+import json
 from io import BytesIO, StringIO
 from datetime import date, datetime, timedelta, timezone
 from html import escape
@@ -30,6 +31,9 @@ from sqlalchemy import text
 
 from app.bot.keyboards.reply import (
     admin_calendar_keyboard,
+    admin_bundle_keyboard,
+    admin_bundle_preview_keyboard,
+    admin_checklist_keyboard,
     admin_material_module_keyboard,
     admin_material_season_keyboard,
     admin_material_type_keyboard,
@@ -121,6 +125,15 @@ from app.notifications.constants import (
     NOTIFICATION_TIME_OPTIONS,
 )
 from app.services.container import AppContainer
+from app.services.admin_material_bundle import (
+    DOCUMENT_KINDS,
+    MATERIAL_KIND_LABELS,
+    MEDIA_KINDS,
+    allowed_kinds_for_payload,
+    checklist_setting_key,
+    checklist_statuses,
+    detect_material_type,
+)
 from app.services.director_dashboard import is_director_dashboard_demo_user
 from app.services.document_service import FileValidationError, SavedUpload
 from app.services.lesson_conversation import (
@@ -3109,6 +3122,95 @@ def build_main_router(container: AppContainer) -> Router:
             parse_mode=None,
         )
 
+    async def material_checklist_data(lesson_key: str) -> tuple[dict[str, int], set[str]]:
+        async with SessionLocal() as session:
+            document_rows = await session.execute(
+                text(
+                    """
+                    SELECT COALESCE(material_type, 'lesson_material') AS kind, COUNT(*) AS amount
+                    FROM documents
+                    WHERE lesson_key = :lesson_key AND visibility = 'global' AND status = 'ready'
+                    GROUP BY COALESCE(material_type, 'lesson_material')
+                    """
+                ),
+                {"lesson_key": lesson_key},
+            )
+            media_rows = await session.execute(
+                text(
+                    """
+                    SELECT media_type AS kind, COUNT(*) AS amount
+                    FROM program_media
+                    WHERE lesson_key = :lesson_key AND media_type IN ('video', 'podcast')
+                    GROUP BY media_type
+                    """
+                ),
+                {"lesson_key": lesson_key},
+            )
+            homework_count = await session.scalar(
+                text("SELECT COUNT(*) FROM homeworks WHERE lesson_key = :lesson_key AND status = 'active'"),
+                {"lesson_key": lesson_key},
+            )
+            setting_value = await AppSettingRepository.get_value(session, checklist_setting_key(lesson_key))
+
+        counts = {str(row.kind): int(row.amount) for row in document_rows}
+        counts.update({str(row.kind): int(row.amount) for row in media_rows})
+        counts["homework"] = max(counts.get("homework", 0), int(homework_count or 0))
+        try:
+            not_required = set(json.loads(setting_value or "[]"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            not_required = set()
+        return counts, not_required
+
+    async def send_admin_material_checklist(message: Message, lesson) -> None:
+        counts, not_required = await material_checklist_data(lesson.lesson_key)
+        statuses = checklist_statuses(counts, not_required)
+        status_labels = {
+            "uploaded": "загружено",
+            "missing": "отсутствует",
+            "not_required": "не требуется",
+        }
+        lines = [
+            "Чеклист занятия",
+            f"{lesson.block_title}: {lesson.lesson_title}",
+            f"Дата: {format_lesson_date(lesson.date_start)}",
+            "",
+        ]
+        checklist_actions: list[tuple[str, str]] = []
+        for kind, label in MATERIAL_KIND_LABELS.items():
+            status = statuses[kind]
+            amount = counts.get(kind, 0)
+            amount_text = f" ({amount})" if amount else ""
+            lines.append(f"- {label}: {status_labels[status]}{amount_text}")
+            if status == "missing":
+                checklist_actions.append((kind, f"Не требуется: {label}"))
+            elif status == "not_required":
+                checklist_actions.append((kind, f"Вернуть в чеклист: {label}"))
+        if any(status == "missing" for status in statuses.values()):
+            lines.extend(["", "Если какой-то тип не планировался, отметь его как «не требуется». "])
+        else:
+            lines.extend(["", "Комплект закрыт: все типы загружены или отмечены как необязательные."])
+        await message.answer(
+            "\n".join(lines),
+            reply_markup=admin_checklist_keyboard(lesson.lesson_key, checklist_actions),
+            parse_mode=None,
+        )
+
+    def bundle_preview_text(state_data: dict[str, Any]) -> str:
+        pending = state_data.get("bundle_pending") or {}
+        kind = pending.get("detected_kind") or "lesson_material"
+        lesson_title = state_data.get("bundle_lesson_title") or "занятие"
+        item_name = pending.get("title") or pending.get("filename") or "текстовый материал"
+        confidence_labels = {"high": "высокая", "medium": "средняя", "low": "низкая"}
+        return (
+            "Проверь перед сохранением\n\n"
+            f"- занятие: {lesson_title}\n"
+            f"- файл/текст: {item_name}\n"
+            f"- определённый тип: {MATERIAL_KIND_LABELS[kind]}\n"
+            f"- уверенность: {confidence_labels.get(pending.get('confidence'), 'средняя')}\n"
+            f"- почему: {pending.get('reason') or 'тип по умолчанию'}\n\n"
+            "Ничего ещё не сохранено. Подтверди тип или выбери другой."
+        )
+
     @router.message(F.text.in_(["Управление материалами", "Админ: материалы программы"]))
     async def admin_materials_section_handler(message: Message, state: FSMContext) -> None:
         if not await require_admin(message):
@@ -3124,13 +3226,432 @@ def build_main_router(container: AppContainer) -> Router:
             "4. Загрузить видео/подкаст, если они готовы.\n"
             "5. Загрузить транскрипцию как «Тип: транскрипция» — участники её не видят отдельной кнопкой, "
             "но ИИ использует её как дополнительный контекст.\n\n"
-            "«Добавить материал» - для файлов, по которым ИИ должен отвечать.\n"
-            "«Добавить видео/подкаст» - для медиафайлов, которые бот просто отдаёт участникам.\n\n"
-            "При добавлении бот проведёт по шагам и привяжет материал к нужному занятию. "
+            "«Загрузить комплект занятия» позволяет выбрать занятие один раз и последовательно добавить все файлы. "
+            "Бот определит тип и покажет предпросмотр до сохранения.\n\n"
+            "«Чеклист занятия» показывает, что уже загружено, чего не хватает и что не требуется.\n\n"
+            "При добавлении бот привяжет материал к выбранному занятию. "
             "Участникам ничего не отправится автоматически.",
             reply_markup=admin_materials_keyboard(),
             parse_mode=None,
         )
+
+    @router.message(F.text == "Загрузить комплект занятия")
+    async def admin_bundle_start_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            return
+        await state.clear()
+        await state.set_state(AdminFlow.waiting_for_bundle_block)
+        await message.answer(
+            "Выбери блок один раз. После этого можно будет прислать все файлы занятия по очереди.",
+            reply_markup=await admin_blocks_keyboard("s1"),
+            parse_mode=None,
+        )
+
+    @router.message(AdminFlow.waiting_for_bundle_block, F.text)
+    async def admin_bundle_block_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        if message.text == "Админ: меню":
+            await state.clear()
+            await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
+            return
+        async with SessionLocal() as session:
+            blocks = await ProgramLessonRepository.list_blocks(session, "s1")
+        block_by_label = {block_button_label(block): block for block in blocks}
+        block = block_by_label.get(message.text)
+        if block is None:
+            await message.answer("Выбери блок кнопкой ниже.", reply_markup=await admin_blocks_keyboard("s1"))
+            return
+        block_key, block_title, _ = block
+        await state.update_data(bundle_block_key=block_key, bundle_block_title=block_title)
+        await state.set_state(AdminFlow.waiting_for_bundle_lesson)
+        await message.answer("Теперь выбери занятие.", reply_markup=await admin_lessons_keyboard(block_key))
+
+    @router.message(AdminFlow.waiting_for_bundle_lesson, F.text)
+    async def admin_bundle_lesson_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        data = await state.get_data()
+        block_key = data.get("bundle_block_key")
+        if not block_key:
+            await state.clear()
+            await message.answer("Потерял выбранный блок. Начни заново.", reply_markup=admin_materials_keyboard())
+            return
+        async with SessionLocal() as session:
+            lessons = await ProgramLessonRepository.list_by_block(session, block_key)
+        lesson = {lesson_button_label(item): item for item in lessons}.get(message.text)
+        if lesson is None:
+            await message.answer("Выбери конкретное занятие кнопкой ниже.", reply_markup=await admin_lessons_keyboard(block_key))
+            return
+        await state.update_data(
+            bundle_lesson_key=lesson.lesson_key,
+            bundle_lesson_title=lesson.lesson_title,
+            bundle_lesson_date=lesson.date_start.isoformat() if lesson.date_start else None,
+            bundle_module_number=lesson.lesson_number,
+            bundle_module_title=f"{lesson.block_title}: {lesson.lesson_title}",
+            bundle_season_title=lesson.season_title,
+            bundle_pending=None,
+        )
+        await state.set_state(AdminFlow.waiting_for_bundle_file)
+        await message.answer(
+            f"Комплект открыт: {lesson.lesson_title}\n\n"
+            "Присылай файлы по одному: презентацию, саммари, ДЗ, транскрипцию, видео или подкаст. "
+            "Бот покажет тип каждого файла до сохранения.\n\n"
+            "Саммари или ДЗ можно прислать обычным текстом.",
+            reply_markup=admin_bundle_keyboard(),
+            parse_mode=None,
+        )
+        await send_admin_material_checklist(message, lesson)
+
+    @router.message(F.text == "Чеклист занятия")
+    async def admin_checklist_start_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            return
+        await state.clear()
+        await state.set_state(AdminFlow.waiting_for_checklist_block)
+        await message.answer("Выбери блок.", reply_markup=await admin_blocks_keyboard("s1"))
+
+    @router.message(AdminFlow.waiting_for_checklist_block, F.text)
+    async def admin_checklist_block_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        async with SessionLocal() as session:
+            blocks = await ProgramLessonRepository.list_blocks(session, "s1")
+        block = {block_button_label(item): item for item in blocks}.get(message.text)
+        if block is None:
+            await message.answer("Выбери блок кнопкой ниже.", reply_markup=await admin_blocks_keyboard("s1"))
+            return
+        await state.update_data(checklist_block_key=block[0])
+        await state.set_state(AdminFlow.waiting_for_checklist_lesson)
+        await message.answer("Выбери занятие.", reply_markup=await admin_lessons_keyboard(block[0]))
+
+    @router.message(AdminFlow.waiting_for_checklist_lesson, F.text)
+    async def admin_checklist_lesson_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        data = await state.get_data()
+        block_key = data.get("checklist_block_key")
+        async with SessionLocal() as session:
+            lessons = await ProgramLessonRepository.list_by_block(session, block_key) if block_key else []
+        lesson = {lesson_button_label(item): item for item in lessons}.get(message.text)
+        if lesson is None:
+            await message.answer("Выбери занятие кнопкой ниже.", reply_markup=await admin_lessons_keyboard(block_key))
+            return
+        await send_admin_material_checklist(message, lesson)
+        await state.clear()
+
+    @router.message(AdminFlow.waiting_for_bundle_file, F.text.in_(["Показать чеклист", "Завершить комплект"]))
+    async def admin_bundle_action_handler(message: Message, state: FSMContext) -> None:
+        data = await state.get_data()
+        lesson_key = data.get("bundle_lesson_key")
+        async with SessionLocal() as session:
+            lesson = await ProgramLessonRepository.get_by_key(session, lesson_key) if lesson_key else None
+        if message.text == "Показать чеклист" and lesson is not None:
+            await send_admin_material_checklist(message, lesson)
+            return
+        await state.clear()
+        if lesson is not None:
+            await send_admin_material_checklist(message, lesson)
+        await message.answer("Загрузка комплекта завершена.", reply_markup=admin_materials_keyboard())
+
+    async def show_bundle_preview(message: Message, state: FSMContext, pending: dict[str, Any]) -> None:
+        await state.update_data(bundle_pending=pending)
+        await state.set_state(AdminFlow.waiting_for_bundle_confirm)
+        allowed_kinds = allowed_kinds_for_payload(
+            telegram_kind=pending.get("telegram_kind"),
+            detected_kind=pending["detected_kind"],
+        )
+        kind_buttons = [(kind, MATERIAL_KIND_LABELS[kind]) for kind in allowed_kinds if kind != pending["detected_kind"]]
+        await message.answer(
+            bundle_preview_text(await state.get_data()),
+            reply_markup=admin_bundle_preview_keyboard(kind_buttons),
+            parse_mode=None,
+        )
+
+    @router.message(AdminFlow.waiting_for_bundle_file)
+    async def admin_bundle_file_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        if message.text == "Админ: меню":
+            await state.clear()
+            await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
+            return
+
+        if message.text:
+            material_text = message.text.strip()
+            detection = detect_material_type(text=material_text)
+            await show_bundle_preview(
+                message,
+                state,
+                {
+                    "payload_kind": "text",
+                    "text": material_text,
+                    "title": material_text.splitlines()[0][:120],
+                    "detected_kind": detection.kind,
+                    "confidence": detection.confidence,
+                    "reason": detection.reason,
+                    "telegram_kind": "text",
+                },
+            )
+            return
+
+        payload = extract_media_payload(message)
+        if payload is None or payload.get("telegram_kind") == "photo":
+            await message.answer(
+                "Пришли документ, видео, аудио или текст. Картинка расписания загружается отдельно.",
+                reply_markup=admin_bundle_keyboard(),
+            )
+            return
+        detection = detect_material_type(
+            filename=payload.get("original_filename"),
+            mime_type=payload.get("mime_type"),
+            telegram_kind=payload.get("telegram_kind"),
+            text=message.caption,
+        )
+        pending = {
+            **payload,
+            "payload_kind": "media" if detection.kind in MEDIA_KINDS else "document",
+            "caption": message.caption or "",
+            "filename": payload.get("original_filename") or payload.get("title"),
+            "detected_kind": detection.kind,
+            "confidence": detection.confidence,
+            "reason": detection.reason,
+        }
+        await show_bundle_preview(message, state, pending)
+
+    @router.callback_query(AdminFlow.waiting_for_bundle_confirm, F.data.startswith("admin_bundle:type:"))
+    async def admin_bundle_type_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
+        if callback.from_user.id not in container.settings.admin_ids:
+            await callback.answer("Доступно только администраторам.", show_alert=True)
+            return
+        data = await state.get_data()
+        pending = data.get("bundle_pending") or {}
+        kind = (callback.data or "").split(":")[-1]
+        allowed = allowed_kinds_for_payload(
+            telegram_kind=pending.get("telegram_kind"),
+            detected_kind=pending.get("detected_kind") or "lesson_material",
+        )
+        if kind not in allowed:
+            await callback.answer("Этот тип не подходит для файла.", show_alert=True)
+            return
+        pending.update(detected_kind=kind, confidence="high", reason="тип выбран администратором")
+        await state.update_data(bundle_pending=pending)
+        await callback.answer("Тип изменён.")
+        if callback.message:
+            other_kinds = [(item, MATERIAL_KIND_LABELS[item]) for item in allowed if item != kind]
+            await callback.message.edit_text(
+                bundle_preview_text(await state.get_data()),
+                reply_markup=admin_bundle_preview_keyboard(other_kinds),
+                parse_mode=None,
+            )
+
+    @router.callback_query(AdminFlow.waiting_for_bundle_confirm, F.data == "admin_bundle:cancel")
+    async def admin_bundle_cancel_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
+        await callback.answer("Файл пропущен.")
+        await state.update_data(bundle_pending=None)
+        await state.set_state(AdminFlow.waiting_for_bundle_file)
+        if callback.message:
+            await callback.message.answer("Ничего не сохранял. Пришли следующий файл.", reply_markup=admin_bundle_keyboard())
+
+    @router.callback_query(AdminFlow.waiting_for_bundle_confirm, F.data == "admin_bundle:confirm")
+    async def admin_bundle_confirm_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
+        if callback.from_user.id not in container.settings.admin_ids:
+            await callback.answer("Доступно только администраторам.", show_alert=True)
+            return
+        data = await state.get_data()
+        pending = data.get("bundle_pending") or {}
+        kind = pending.get("detected_kind")
+        lesson_key = data.get("bundle_lesson_key")
+        if not pending or kind not in MATERIAL_KIND_LABELS or not lesson_key or callback.message is None:
+            await callback.answer("Данные файла потерялись. Пришли его ещё раз.", show_alert=True)
+            await state.set_state(AdminFlow.waiting_for_bundle_file)
+            return
+        await callback.answer("Сохраняю...")
+        lesson_date_raw = data.get("bundle_lesson_date")
+        lesson_date = date.fromisoformat(lesson_date_raw) if lesson_date_raw else None
+        module_number = data.get("bundle_module_number")
+        module_title = data.get("bundle_module_title")
+        season_title = data.get("bundle_season_title")
+        user = await upsert_telegram_user(callback.from_user)
+
+        try:
+            if kind in MEDIA_KINDS:
+                stored_path = await save_media_file_to_storage(callback.message, pending, kind)
+                tags = build_content_tags(
+                    lesson_key=lesson_key,
+                    module_number=module_number,
+                    lesson_date=lesson_date,
+                    season_title=season_title,
+                    media_type=kind,
+                )
+                async with SessionLocal() as session:
+                    saved_item = await ProgramMediaRepository.create(
+                        session=session,
+                        title=(pending.get("title") or pending.get("filename") or MATERIAL_KIND_LABELS[kind])[:500],
+                        media_type=kind,
+                        telegram_file_id=pending["telegram_file_id"],
+                        telegram_file_unique_id=pending.get("telegram_file_unique_id"),
+                        telegram_kind=pending.get("telegram_kind") or "document",
+                        stored_path=stored_path,
+                        original_filename=pending.get("original_filename"),
+                        file_size=pending.get("file_size"),
+                        mime_type=pending.get("mime_type"),
+                        module_number=module_number,
+                        module_title=module_title,
+                        lesson_key=lesson_key,
+                        lesson_date=lesson_date,
+                        tags=tags,
+                        created_by_user_id=user.id,
+                    )
+                result_text = f"Сохранено: {MATERIAL_KIND_LABELS[kind]}, media id={saved_item.id}."
+                if kind == "video" and not stored_path:
+                    result_text += " Видео осталось в Telegram: для mini app его нужно отдельно положить на сервер."
+            else:
+                material_text = pending.get("text") or pending.get("caption") or ""
+                if pending.get("payload_kind") == "text":
+                    original_title = material_text.splitlines()[0][:500]
+                    document_title = original_title
+                    if kind == "summary":
+                        document_title, material_text = split_summary_title_and_text(
+                            material_text,
+                            module_number=module_number,
+                            module_title=module_title,
+                            lesson_date=lesson_date,
+                        )
+                    saved_upload = await save_text_material_as_upload(material_text, lesson_key, kind)
+                else:
+                    filename = pending.get("original_filename") or pending.get("filename")
+                    container.document_service.validate_file(filename, pending.get("file_size"))
+                    saved_upload = await container.document_service.save_telegram_file(
+                        bot=callback.message.bot,
+                        telegram_file_id=pending["telegram_file_id"],
+                        filename=filename,
+                        owner_telegram_id=callback.from_user.id,
+                        mode="global",
+                    )
+                    original_title = (pending.get("caption") or "").strip().splitlines()[0] or Path(filename).stem
+                    document_title = original_title
+
+                homework_title = document_title
+                homework_description = material_text or None
+                if kind == "homework":
+                    homework_title, homework_description = split_homework_title_and_description(
+                        material_text,
+                        module_number=module_number,
+                        module_title=module_title,
+                        lesson_date=lesson_date,
+                        fallback_title=document_title,
+                    )
+                    document_title = homework_title
+
+                tags = build_content_tags(
+                    lesson_key=lesson_key,
+                    module_number=module_number,
+                    lesson_date=lesson_date,
+                    season_title=season_title,
+                    material_type=kind,
+                )
+                async with SessionLocal() as session:
+                    indexed_document = await container.document_service.create_and_index_document(
+                        session=session,
+                        title=document_title,
+                        saved_upload=saved_upload,
+                        visibility="global",
+                        owner_user_id=user.id,
+                        telegram_file_id=pending.get("telegram_file_id"),
+                        module_number=module_number,
+                        module_title=module_title,
+                        lesson_key=lesson_key,
+                        lesson_date=lesson_date,
+                        material_type=kind,
+                        tags=tags,
+                    )
+                    if kind == "homework":
+                        await HomeworkRepository.create(
+                            session=session,
+                            title=homework_title,
+                            description=homework_description,
+                            document_id=indexed_document.id,
+                            moodle_url=None,
+                            module_number=module_number,
+                            module_title=module_title,
+                            lesson_key=lesson_key,
+                            lesson_date=lesson_date,
+                            deadline_date=None,
+                            created_by_user_id=user.id,
+                        )
+                result_text = f"Сохранено: {MATERIAL_KIND_LABELS[kind]}, document id={indexed_document.id}."
+                if kind == "homework":
+                    result_text += " Дедлайн и ссылка не заданы: пакетная загрузка не рассылает напоминания по такому ДЗ."
+
+            await state.update_data(bundle_pending=None)
+            await state.set_state(AdminFlow.waiting_for_bundle_file)
+            await callback.message.answer(result_text + "\n\nПришли следующий файл или заверши комплект.", reply_markup=admin_bundle_keyboard())
+            async with SessionLocal() as session:
+                lesson = await ProgramLessonRepository.get_by_key(session, lesson_key)
+            if lesson is not None:
+                await send_admin_material_checklist(callback.message, lesson)
+        except Exception as exc:
+            logger.exception("bundle_material_save_failed")
+            async with SessionLocal() as session:
+                await ErrorRepository.create(session, context="bundle_material_save", error_text=str(exc), user_id=user.id)
+            await callback.message.answer(
+                "Не получилось сохранить файл. Он не добавлен; можно выбрать другой тип или прислать файл ещё раз.",
+                reply_markup=admin_bundle_keyboard(),
+            )
+            await state.set_state(AdminFlow.waiting_for_bundle_file)
+
+    @router.callback_query(F.data.startswith("admin_checklist:"))
+    async def admin_checklist_callback_handler(callback: CallbackQuery) -> None:
+        if callback.from_user.id not in container.settings.admin_ids:
+            await callback.answer("Доступно только администраторам.", show_alert=True)
+            return
+        parts = (callback.data or "").split(":")
+        if len(parts) < 3:
+            await callback.answer("Не понял чеклист.", show_alert=True)
+            return
+        action, lesson_key = parts[1], parts[2]
+        async with SessionLocal() as session:
+            lesson = await ProgramLessonRepository.get_by_key(session, lesson_key)
+            if lesson is None:
+                await callback.answer("Занятие не найдено.", show_alert=True)
+                return
+            if action == "toggle" and len(parts) == 4:
+                kind = parts[3]
+                if kind not in MATERIAL_KIND_LABELS:
+                    await callback.answer("Неизвестный тип.", show_alert=True)
+                    return
+                raw = await AppSettingRepository.get_value(session, checklist_setting_key(lesson_key))
+                try:
+                    not_required = set(json.loads(raw or "[]"))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    not_required = set()
+                if kind in not_required:
+                    not_required.remove(kind)
+                else:
+                    not_required.add(kind)
+                user = await UserRepository.upsert_telegram_user(
+                    session=session,
+                    telegram_id=callback.from_user.id,
+                    username=callback.from_user.username,
+                    first_name=callback.from_user.first_name,
+                    last_name=callback.from_user.last_name,
+                    is_admin=True,
+                )
+                await AppSettingRepository.upsert(
+                    session,
+                    key=checklist_setting_key(lesson_key),
+                    value=json.dumps(sorted(not_required), ensure_ascii=False),
+                    updated_by_user_id=user.id,
+                )
+        await callback.answer("Чеклист обновлён.")
+        if callback.message:
+            await send_admin_material_checklist(callback.message, lesson)
 
     @router.message(F.text == "Сервисные действия")
     async def admin_materials_service_handler(message: Message, state: FSMContext) -> None:

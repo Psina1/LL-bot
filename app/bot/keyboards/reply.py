@@ -4,9 +4,8 @@ from app.notifications.constants import NOTIFICATION_TIME_OPTIONS
 
 
 MAIN_MENU_BUTTONS = [
-    [KeyboardButton(text="Задать вопрос"), KeyboardButton(text="Материалы программы")],
-    [KeyboardButton(text="Домашние задания"), KeyboardButton(text="Расписание Лиги Лидеров")],
-    [KeyboardButton(text="Настройки уведомлений")],
+    [KeyboardButton(text="Материалы программы"), KeyboardButton(text="Домашние задания")],
+    [KeyboardButton(text="Расписание Лиги Лидеров"), KeyboardButton(text="Настройки уведомлений")],
 ]
 
 PROJECT_CONTEXT_MENU_BUTTON = [KeyboardButton(text="Уточнить контекст моего проекта")]
@@ -70,10 +69,21 @@ ADMIN_STATUS_BUTTONS = [
 ]
 
 ADMIN_MATERIALS_BUTTONS = [
-    [KeyboardButton(text="Добавить материал"), KeyboardButton(text="Добавить видео/подкаст")],
-    [KeyboardButton(text="Библиотека материалов"), KeyboardButton(text="Домашние задания в базе")],
-    [KeyboardButton(text="Сервисные действия")],
+    [KeyboardButton(text="Загрузить комплект занятия")],
+    [KeyboardButton(text="Чеклист занятия"), KeyboardButton(text="Библиотека материалов")],
+    [KeyboardButton(text="Домашние задания в базе"), KeyboardButton(text="Сервисные действия")],
     [KeyboardButton(text="Админ: меню")],
+]
+
+ADMIN_BUNDLE_BUTTONS = [
+    [KeyboardButton(text="Показать чеклист"), KeyboardButton(text="Завершить комплект")],
+    [KeyboardButton(text="Админ: меню")],
+]
+
+# Старые кнопки больше не показываются, но ещё могут оставаться в уже открытой
+# клавиатуре Telegram. Регистрируем их как навигацию до следующего обновления чата.
+LEGACY_HIDDEN_ADMIN_BUTTONS = [
+    [KeyboardButton(text="Добавить материал"), KeyboardButton(text="Добавить видео/подкаст")],
 ]
 
 ADMIN_MATERIALS_SERVICE_BUTTONS = [
@@ -113,7 +123,15 @@ ADMIN_TEXTS_BUTTONS = [
 
 ADMIN_MATERIAL_SEASON_BUTTONS = [
     [KeyboardButton(text="Материал: Сезон 1. Бизнес-консалтинг")],
+    [KeyboardButton(text="Материал: Сезон 2. Люди")],
     [KeyboardButton(text="Материал: без сезона")],
+    [KeyboardButton(text="Админ: меню")],
+]
+
+ADMIN_MEDIA_SEASON_BUTTONS = [
+    [KeyboardButton(text="Медиа: Сезон 1. Бизнес-консалтинг")],
+    [KeyboardButton(text="Медиа: Сезон 2. Люди")],
+    [KeyboardButton(text="Медиа: без сезона")],
     [KeyboardButton(text="Админ: меню")],
 ]
 
@@ -221,6 +239,10 @@ def admin_materials_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=ADMIN_MATERIALS_BUTTONS, resize_keyboard=True)
 
 
+def admin_bundle_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=ADMIN_BUNDLE_BUTTONS, resize_keyboard=True)
+
+
 def admin_materials_service_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=ADMIN_MATERIALS_SERVICE_BUTTONS, resize_keyboard=True)
 
@@ -252,12 +274,15 @@ def all_reply_button_labels() -> set[str]:
         ADMIN_MENU_BUTTONS,
         ADMIN_STATUS_BUTTONS,
         ADMIN_MATERIALS_BUTTONS,
+        ADMIN_BUNDLE_BUTTONS,
+        LEGACY_HIDDEN_ADMIN_BUTTONS,
         ADMIN_MATERIALS_SERVICE_BUTTONS,
         ADMIN_NOTIFICATIONS_BUTTONS,
         ADMIN_CALENDAR_BUTTONS,
         ADMIN_TECH_FILES_BUTTONS,
         ADMIN_TEXTS_BUTTONS,
         ADMIN_MATERIAL_SEASON_BUTTONS,
+        ADMIN_MEDIA_SEASON_BUTTONS,
         ADMIN_MATERIAL_MODULE_BUTTONS,
         ADMIN_MATERIAL_TYPE_BUTTONS,
         ADMIN_LESSON_DATE_BUTTONS,
@@ -280,6 +305,10 @@ def admin_texts_keyboard() -> ReplyKeyboardMarkup:
 
 def admin_material_season_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=ADMIN_MATERIAL_SEASON_BUTTONS, resize_keyboard=True)
+
+
+def admin_media_season_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=ADMIN_MEDIA_SEASON_BUTTONS, resize_keyboard=True)
 
 
 def admin_material_module_keyboard() -> ReplyKeyboardMarkup:
@@ -337,12 +366,28 @@ def materials_program_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="Последнее занятие", callback_data="materials:last_lesson")],
             [InlineKeyboardButton(text="Выбрать занятие", callback_data="materials:choose_lesson")],
-            [InlineKeyboardButton(text="Все материалы", callback_data="materials:all")],
-            [InlineKeyboardButton(text="Подкасты", callback_data="materials:podcasts")],
-            [InlineKeyboardButton(text="Саммари", callback_data="materials:summary")],
             [InlineKeyboardButton(text="Главное меню", callback_data="menu:main")],
         ]
     )
+
+
+def admin_bundle_preview_keyboard(kinds: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+    keyboard = [[InlineKeyboardButton(text="Сохранить", callback_data="admin_bundle:confirm")]]
+    keyboard.extend(
+        [InlineKeyboardButton(text=label, callback_data=f"admin_bundle:type:{kind}")]
+        for kind, label in kinds
+    )
+    keyboard.append([InlineKeyboardButton(text="Пропустить файл", callback_data="admin_bundle:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def admin_checklist_keyboard(lesson_key: str, actions: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton(text=label, callback_data=f"admin_checklist:toggle:{lesson_key}:{kind}")]
+        for kind, label in actions
+    ]
+    keyboard.append([InlineKeyboardButton(text="Обновить", callback_data=f"admin_checklist:show:{lesson_key}")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def materials_lesson_card_keyboard(

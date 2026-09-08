@@ -17,6 +17,12 @@ class UserFlow(StatesGroup):
 
 
 class AdminFlow(StatesGroup):
+    waiting_for_bundle_block = State()
+    waiting_for_bundle_lesson = State()
+    waiting_for_bundle_file = State()
+    waiting_for_bundle_confirm = State()
+    waiting_for_checklist_block = State()
+    waiting_for_checklist_lesson = State()
     waiting_for_material_season = State()
     waiting_for_material_block = State()
     waiting_for_material_lesson = State()
@@ -27,6 +33,7 @@ class AdminFlow(StatesGroup):
     waiting_for_homework_deadline = State()
     waiting_for_global_file = State()
     waiting_for_media_type = State()
+    waiting_for_media_season = State()
     waiting_for_media_block = State()
     waiting_for_media_lesson = State()
     waiting_for_media_module = State()
