@@ -2379,8 +2379,14 @@ def build_main_router(container: AppContainer) -> Router:
             return False
         if plan.action == "clarify":
             clarification = plan.clarification or "Уточни, пожалуйста, какое занятие ты имеешь в виду."
+            await state.update_data(
+                conversation_speaker_hint=plan.speaker_hint,
+                conversation_pending_question=text_value or "",
+            )
             await message.answer(clarification, parse_mode=None)
             return True
+
+        await state.update_data(conversation_pending_question=None)
 
         lesson_by_key = {lesson.lesson_key: lesson for lesson in lessons}
         lesson = lesson_by_key.get(plan.lesson_key) if plan.lesson_key else None

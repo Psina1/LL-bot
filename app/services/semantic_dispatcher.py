@@ -18,6 +18,7 @@ SEMANTIC_ACTIONS = {
     "fallback",
 }
 CONTENT_TYPES = {"materials", "summary", "homework", "video", "podcast"}
+RELATIVE_POSITIONS = {"latest", "first", "penultimate"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +28,7 @@ class SemanticPlan:
     speaker_hint: str | None = None
     content_type: str | None = None
     content_types: tuple[str, ...] = ()
+    relative_position: str | None = None
     include_card: bool = False
     clarification: str | None = None
     confidence: float = 0.0
@@ -65,6 +67,9 @@ def parse_semantic_plan(raw_text: str, valid_lesson_keys: set[str]) -> SemanticP
 
     content_types = _parse_content_types(payload)
     content_type = content_types[0] if content_types else None
+    relative_position = _optional_string(payload.get("relative_position"))
+    if relative_position not in RELATIVE_POSITIONS:
+        relative_position = None
 
     if action in {"lesson_card", "content_delivery"} and lesson_key is None:
         action = "fallback"
@@ -83,6 +88,7 @@ def parse_semantic_plan(raw_text: str, valid_lesson_keys: set[str]) -> SemanticP
         speaker_hint=_optional_string(payload.get("speaker_hint")),
         content_type=content_type,
         content_types=content_types,
+        relative_position=relative_position,
         include_card=payload.get("include_card") is True and lesson_key is not None,
         clarification=_optional_string(payload.get("clarification")),
         confidence=confidence,
@@ -128,6 +134,11 @@ async def build_semantic_plan(
         "это проверит следующий инструмент. Для ясного намерения и однозначного занятия ставь 0.8-1.0.\n"
         "10. Если пользователь просит материалы, запись, саммари, домашнее задание или подкаст "
         "к занятию из свежего контекста, выбирай content_delivery и это занятие.\n\n"
+        "11. Нормализуй относительное указание на занятие в relative_position: "
+        "latest для самого последнего/свежего, first для первого, penultimate для предпоследнего, "
+        "иначе null. Распознавай смысл даже с опечатками.\n"
+        "12. Если свежий контекст содержит pending_question, короткий ответ пользователя вроде "
+        "'самое последнее' завершает этот исходный запрос: сохрани его намерение, спикера и выбери занятие.\n\n"
         "Примеры:\n"
         "- 'Приведи цитаты Иванова с его последнего занятия' -> rag_answer, последнее по дате занятие Иванова, "
         "speaker_hint=Иванов, include_card=true, confidence=0.95.\n"
@@ -135,7 +146,8 @@ async def build_semantic_plan(
         "lesson_key из свежего контекста, content_types=[materials], confidence=0.95.\n\n"
         "Формат JSON: "
         '{"action":"rag_answer","lesson_key":"... или null","speaker_hint":"... или null",'
-        '"content_types":[],"include_card":true,"clarification":"... или null","confidence":0.9}'
+        '"content_types":[],"relative_position":"latest или null","include_card":true,'
+        '"clarification":"... или null","confidence":0.9}'
     )
     user_prompt = (
         f"Сегодня: {(today or date.today()).isoformat()}\n\n"
@@ -144,12 +156,16 @@ async def build_semantic_plan(
         "Свежий контекст:\n"
         f"lesson_key={context.get('conversation_lesson_key') or '-'}\n"
         f"speaker={context.get('conversation_speaker_hint') or '-'}\n"
+        f"pending_question={str(context.get('conversation_pending_question') or '-')[:400]}\n"
         f"last_question={str(context.get('last_question') or '-')[:400]}\n\n"
         "Вопрос пользователя:\n"
         f"{question[:2000]}"
     )
     result = await llm_client.chat_completion(system_prompt, user_prompt, temperature=0)
     plan = parse_semantic_plan(result.answer, valid_keys)
+    remembered_speaker = _optional_string(context.get("conversation_speaker_hint"))
+    if plan.speaker_hint is None and remembered_speaker and plan.action not in {"fallback", "schedule_answer"}:
+        plan = replace(plan, speaker_hint=remembered_speaker)
     return _validate_speaker_lesson(
         plan,
         question=question,
@@ -237,20 +253,15 @@ def _validate_speaker_lesson(
     if not matching_lessons:
         return replace(plan, action="fallback", lesson_key=None, include_card=False, confidence=0.0)
     normalized_question = question.casefold().replace("ё", "е")
-    relative_reference = re.search(
-        r"\b(последн\w*|предпоследн\w*|перв\w*|свеж\w*|недавн\w*)\b",
-        normalized_question,
-    )
-    if relative_reference:
+    if plan.relative_position:
         dated_lessons = sorted(
             (lesson for lesson in matching_lessons if lesson.date_start is not None),
             key=lambda lesson: lesson.date_start,
         )
         if dated_lessons:
-            marker = relative_reference.group(1)
-            if "предпослед" in marker and len(dated_lessons) > 1:
+            if plan.relative_position == "penultimate" and len(dated_lessons) > 1:
                 selected = dated_lessons[-2]
-            elif "перв" in marker:
+            elif plan.relative_position == "first":
                 selected = dated_lessons[0]
             else:
                 selected = dated_lessons[-1]

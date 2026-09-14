@@ -122,6 +122,7 @@ def test_dispatch_prompt_contains_full_catalog_and_dialog_context() -> None:
             "action": "rag_answer",
             "lesson_key": "s1_b3_l4",
             "speaker_hint": "Семенов",
+            "relative_position": "latest",
             "include_card": True,
             "confidence": 0.95,
         }
@@ -153,6 +154,7 @@ def test_dispatch_repairs_wrong_lesson_for_latest_speaker_request() -> None:
             "action": "rag_answer",
             "lesson_key": "s1_b4_l4",
             "speaker_hint": "Александр Семенов",
+            "relative_position": "latest",
             "include_card": True,
             "confidence": 0.95,
         }
@@ -217,3 +219,35 @@ def test_dispatch_clarifies_when_model_picks_one_of_ambiguous_speaker_lessons() 
     )
     assert plan.action == "clarify"
     assert plan.lesson_key is None
+
+
+def test_followup_inherits_speaker_from_pending_context() -> None:
+    lessons = [
+        lesson("s1_b3_l1", 1, "Стратегия как инструмент", "Александр Семенов"),
+        lesson("s1_b3_l4", 14, "Защита проектов", "Александр Семенов"),
+    ]
+    fake = FakeLLM(
+        {
+            "action": "rag_answer",
+            "lesson_key": "s1_b3_l4",
+            "speaker_hint": None,
+            "relative_position": "latest",
+            "include_card": True,
+            "confidence": 0.95,
+        }
+    )
+    plan = asyncio.run(
+        build_semantic_plan(
+            llm_client=fake,
+            question="самое последнее",
+            lessons=lessons,
+            conversation={
+                "conversation_speaker_hint": "Семенов",
+                "conversation_pending_question": "Приведи цитаты Семенова",
+            },
+        )
+    )
+    assert plan.action == "rag_answer"
+    assert plan.lesson_key == "s1_b3_l4"
+    assert plan.speaker_hint == "Семенов"
+    assert "pending_question=Приведи цитаты Семенова" in fake.user_prompt
