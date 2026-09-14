@@ -12,6 +12,7 @@ from app.rag.speaker_attribution import (
     requests_general_discussion,
     split_transcript_by_speaker,
     verified_quote_answer,
+    verified_quote_answer_from_selection,
 )
 
 
@@ -88,6 +89,57 @@ class SpeakerAttributionTests(unittest.TestCase):
         quoted = re.findall(r"\d+\. «([^»]+)»", answer)
         self.assertEqual(len(quoted), 2)
         self.assertTrue(all("стратег" in quote.casefold() for quote in quoted))
+
+    def test_verified_quotes_ignore_lesson_reference_words_and_filler_fragments(self) -> None:
+        chunks = [
+            "Же возвращаюсь к тому, что мы сегодня обсуждали в начале занятия.",
+            "Прибыль показывает, насколько устойчиво бизнес превращает выручку клиентов в финансовый результат.",
+            "А у нас сегодня не будет группового занятия.",
+        ]
+        answer = verified_quote_answer(
+            chunks,
+            "С. Сафронов",
+            "Дай цитаты Сафронова с первого его занятия",
+        )
+        self.assertIn("Прибыль показывает", answer)
+        self.assertNotIn("возвращаюсь", answer)
+        self.assertNotIn("не будет группового", answer)
+
+    def test_verified_quotes_only_return_requested_topic(self) -> None:
+        chunks = [
+            "Сегодня мы подробно обсуждаем структуру учебного занятия.",
+            "Бизнес создаёт деньги, когда ценность для клиента превышает понесённые расходы.",
+            "Будущее КОРУСа зависит от качества управленческих решений и устойчивости бизнес-модели.",
+        ]
+        answer = verified_quote_answer(
+            chunks,
+            "С. Сафронов",
+            "Есть цитаты о бизнесе, деньгах и будущем КОРУСа?",
+        )
+        self.assertNotIn("структуру учебного занятия", answer)
+        self.assertIn("Бизнес создаёт деньги", answer)
+        self.assertIn("Будущее КОРУСа", answer)
+
+    def test_model_selected_quotes_must_be_verbatim_and_topic_relevant(self) -> None:
+        chunks = [
+            "Бизнес создаёт деньги, когда ценность для клиента превышает понесённые расходы.",
+            "Сегодня мы обсуждали расписание и формат следующего занятия.",
+        ]
+        selection = (
+            '{"quotes":['
+            '"Бизнес создаёт деньги, когда ценность для клиента превышает понесённые расходы.",'
+            '"Сегодня мы обсуждали расписание и формат следующего занятия.",'
+            '"Бизнес создаёт большую прибыль."]}'
+        )
+        answer = verified_quote_answer_from_selection(
+            selection,
+            chunks,
+            "С. Сафронов",
+            "Дай цитаты о бизнесе и деньгах",
+        )
+        self.assertIn("Бизнес создаёт деньги", answer)
+        self.assertNotIn("расписание", answer)
+        self.assertNotIn("большую прибыль", answer)
 
     def test_transcript_chunks_do_not_cross_speakers(self) -> None:
         chunks = split_transcript_by_speaker(

@@ -16,8 +16,9 @@ from app.rag.service import RAGService
 from app.rag.speaker_attribution import (
     enforce_unconfirmed_speaker_answer,
     neutralize_anonymous_authors,
+    quote_selection_prompts,
     requests_direct_quotes,
-    verified_quote_answer,
+    verified_quote_answer_from_selection,
 )
 
 
@@ -107,6 +108,7 @@ class ChatService:
         )
         context_text = ""
         sources: list[dict[str, Any]] = []
+        rag_context = None
 
         if force_rag:
             try:
@@ -196,27 +198,47 @@ class ChatService:
                 f"{self.ANSWER_STYLE_RULE}"
             )
 
-        result = await self.llm_client.chat_completion(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt)
-        answer_text = (
-            neutralize_anonymous_authors(result.answer)
-            if speaker_rag_active
-            else result.answer
-        )
-        if speaker_rag_active and rag_context.requested_speaker and rag_context.speaker_confirmed is False:
-            answer_text = enforce_unconfirmed_speaker_answer(
-                answer_text,
-                rag_context.requested_speaker,
-            )
-        elif (
+        direct_verified_quotes = bool(
             speaker_rag_active
+            and rag_context is not None
             and rag_context.requested_speaker
             and rag_context.speaker_confirmed
             and requests_direct_quotes(question)
-        ):
-            answer_text = verified_quote_answer(
-                [chunk.chunk_text for chunk in rag_context.chunks],
+        )
+        if direct_verified_quotes:
+            chunk_texts = [chunk.chunk_text for chunk in rag_context.chunks]
+            quote_system_prompt, quote_user_prompt = quote_selection_prompts(
+                chunk_texts,
                 rag_context.requested_speaker,
-                question=question,
+                question,
+            )
+            result = await self.llm_client.chat_completion(
+                system_prompt=quote_system_prompt,
+                user_prompt=quote_user_prompt,
+                temperature=0,
+            )
+            answer_text = verified_quote_answer_from_selection(
+                result.answer,
+                chunk_texts,
+                rag_context.requested_speaker,
+                question,
+            )
+        else:
+            result = await self.llm_client.chat_completion(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt)
+            answer_text = (
+                neutralize_anonymous_authors(result.answer)
+                if speaker_rag_active
+                else result.answer
+            )
+        if (
+            speaker_rag_active
+            and rag_context is not None
+            and rag_context.requested_speaker
+            and rag_context.speaker_confirmed is False
+        ):
+            answer_text = enforce_unconfirmed_speaker_answer(
+                answer_text,
+                rag_context.requested_speaker,
             )
         answer_text = self._ensure_sources_block(answer_text, sources)
         message = await MessageRepository.create(
