@@ -145,6 +145,7 @@ from app.services.lesson_conversation import (
     uses_remembered_lesson_context,
 )
 from app.services.question_routing import route_direct_question
+from app.services.semantic_dispatcher import build_semantic_plan
 from app.services.video_links import build_director_dashboard_url, build_video_watch_url
 
 logger = logging.getLogger(__name__)
@@ -2342,6 +2343,130 @@ def build_main_router(container: AppContainer) -> Router:
             )
             return True
 
+        return False
+
+    async def answer_semantic_question_if_supported(
+        message: Message,
+        text_value: str | None,
+        state: FSMContext,
+        telegram_user=None,
+    ) -> bool:
+        if not container.settings.semantic_dispatch_enabled or not (text_value or "").strip():
+            return False
+
+        async with SessionLocal() as session:
+            lessons = await ProgramLessonRepository.list_active(session)
+        state_data = await state.get_data()
+        try:
+            plan = await build_semantic_plan(
+                llm_client=container.llm_client,
+                question=text_value or "",
+                lessons=lessons,
+                conversation=state_data,
+            )
+        except Exception:
+            logger.exception("semantic_dispatch_failed")
+            return False
+
+        logger.info(
+            "semantic_dispatch action=%s lesson_key=%s content_type=%s confidence=%.2f",
+            plan.action,
+            plan.lesson_key,
+            ",".join(plan.content_types),
+            plan.confidence,
+        )
+        if plan.action == "fallback":
+            return False
+        if plan.action == "clarify":
+            clarification = plan.clarification or "Уточни, пожалуйста, какое занятие ты имеешь в виду."
+            await message.answer(clarification, parse_mode=None)
+            return True
+
+        lesson_by_key = {lesson.lesson_key: lesson for lesson in lessons}
+        lesson = lesson_by_key.get(plan.lesson_key) if plan.lesson_key else None
+        speaker_hint = plan.speaker_hint
+        if lesson is not None and speaker_hint:
+            normalized_speaker = speaker_hint.casefold().replace("ё", "е")
+            lesson_speakers = (lesson.speaker or "").casefold().replace("ё", "е")
+            speaker_tokens = re.findall(r"[a-zа-я-]{4,}", normalized_speaker)
+            if not speaker_tokens or not any(token in lesson_speakers for token in speaker_tokens):
+                speaker_hint = None
+
+        if plan.action == "schedule_answer":
+            schedule_context = await build_schedule_context_for_llm()
+            await answer_question(
+                message,
+                text_value or "",
+                state,
+                mode="semantic_schedule",
+                extra_context=schedule_context,
+                telegram_user=telegram_user,
+                show_followup_menu=False,
+            )
+            if should_send_schedule_image_for_question(text_value):
+                await send_schedule_image(message)
+            return True
+
+        if lesson is None:
+            if plan.action == "rag_answer":
+                await answer_question(
+                    message,
+                    text_value or "",
+                    state,
+                    mode="semantic_rag",
+                    telegram_user=telegram_user,
+                    show_followup_menu=False,
+                )
+                return True
+            return False
+
+        await remember_lesson_context(state, lesson, speaker_hint=speaker_hint)
+        if plan.action == "lesson_card":
+            await send_materials_lesson_card(
+                message,
+                lesson,
+                telegram_user=telegram_user,
+                state=state,
+                speaker_hint=speaker_hint,
+            )
+            return True
+
+        if plan.action == "content_delivery":
+            for content_type in plan.content_types:
+                await send_materials_by_lookup(
+                    message,
+                    {
+                        "lesson_key": lesson.lesson_key,
+                        "lesson_date": lesson.date_start,
+                        "module_number": lesson.lesson_number,
+                        "content_type": content_type,
+                        "label": lesson.lesson_title,
+                    },
+                    telegram_user=telegram_user,
+                )
+            return True
+
+        if plan.action == "rag_answer":
+            await answer_question(
+                message,
+                text_value or "",
+                state,
+                mode="semantic_lesson_rag",
+                lesson_key=lesson.lesson_key,
+                lesson_date=lesson.date_start,
+                telegram_user=telegram_user,
+                show_followup_menu=False,
+                speaker_hint=speaker_hint,
+            )
+            if plan.include_card:
+                await send_materials_lesson_card(
+                    message,
+                    lesson,
+                    telegram_user=telegram_user,
+                    state=state,
+                    speaker_hint=speaker_hint,
+                )
+            return True
         return False
 
     def media_caption(media) -> str | None:
@@ -6063,6 +6188,9 @@ def build_main_router(container: AppContainer) -> Router:
             await answer_material_question(message, document_id, question, state)
             await state.clear()
             return
+        if await answer_semantic_question_if_supported(message, message.text, state):
+            await clear_flow_preserving_lesson_context(state)
+            return
         material_lookup = extract_material_lookup(message.text)
         if material_lookup is not None:
             await send_materials_by_lookup(message, material_lookup)
@@ -6084,6 +6212,9 @@ def build_main_router(container: AppContainer) -> Router:
             document_id, question = material_question
             await answer_material_question(message, document_id, question, state)
             await state.clear()
+            return
+        if section != "technical" and await answer_semantic_question_if_supported(message, message.text, state):
+            await clear_flow_preserving_lesson_context(state)
             return
         material_lookup = extract_material_lookup(message.text)
         if material_lookup is not None:
@@ -6235,6 +6366,9 @@ def build_main_router(container: AppContainer) -> Router:
             document_id, question = material_question
             await answer_material_question(message, document_id, question, state)
             await state.clear()
+            return
+        if await answer_semantic_question_if_supported(message, message.text, state):
+            await clear_flow_preserving_lesson_context(state)
             return
         material_lookup = extract_material_lookup(message.text)
         if material_lookup is not None:
@@ -6740,6 +6874,9 @@ def build_main_router(container: AppContainer) -> Router:
                 if await answer_direct_question_if_supported(message, question, state):
                     await state.clear()
                     return
+                if await answer_semantic_question_if_supported(message, question, state):
+                    await clear_flow_preserving_lesson_context(state)
+                    return
                 structured_allowed = True
                 if current_state == UserFlow.waiting_for_categorized_question.state:
                     state_data = await state.get_data()
@@ -6812,6 +6949,8 @@ def build_main_router(container: AppContainer) -> Router:
         if material_question is not None:
             document_id, question = material_question
             await answer_material_question(message, document_id, question, state)
+            return
+        if await answer_semantic_question_if_supported(message, message.text, state):
             return
         if await answer_structured_lesson_question_if_supported(message, message.text, state):
             return

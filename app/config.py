@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     max_context_chars: int = Field(default=12000, alias="MAX_CONTEXT_CHARS")
     speaker_rag_enabled: bool = Field(default=False, alias="SPEAKER_RAG_ENABLED")
     speaker_rag_admin_only: bool = Field(default=True, alias="SPEAKER_RAG_ADMIN_ONLY")
+    semantic_dispatch_enabled: bool = Field(default=True, alias="SEMANTIC_DISPATCH_ENABLED")
     max_user_questions_per_minute: int = Field(default=10, alias="MAX_USER_QUESTIONS_PER_MINUTE")
     max_voice_duration_seconds: int = Field(default=180, alias="MAX_VOICE_DURATION_SECONDS")
     max_voice_size_mb: int = Field(default=10, alias="MAX_VOICE_SIZE_MB")
