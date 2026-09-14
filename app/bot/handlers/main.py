@@ -2436,6 +2436,7 @@ def build_main_router(container: AppContainer) -> Router:
                 state=state,
                 speaker_hint=speaker_hint,
             )
+            await state.update_data(conversation_card_lesson_key=lesson.lesson_key)
             return True
 
         if plan.action == "content_delivery":
@@ -2465,7 +2466,7 @@ def build_main_router(container: AppContainer) -> Router:
                 show_followup_menu=False,
                 speaker_hint=speaker_hint,
             )
-            if plan.include_card:
+            if plan.include_card and state_data.get("conversation_card_lesson_key") != lesson.lesson_key:
                 await send_materials_lesson_card(
                     message,
                     lesson,
@@ -2473,6 +2474,7 @@ def build_main_router(container: AppContainer) -> Router:
                     state=state,
                     speaker_hint=speaker_hint,
                 )
+                await state.update_data(conversation_card_lesson_key=lesson.lesson_key)
             return True
         return False
 
