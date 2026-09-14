@@ -2399,6 +2399,7 @@ def build_main_router(container: AppContainer) -> Router:
                 text_value or "",
                 state,
                 mode="semantic_schedule",
+                force_rag=False,
                 extra_context=schedule_context,
                 telegram_user=telegram_user,
                 show_followup_menu=False,
