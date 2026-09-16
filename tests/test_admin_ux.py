@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.bot.handlers.lesson_feedback import build_lesson_display_numbers, second_score_question_text
@@ -9,6 +10,7 @@ from app.bot.keyboards.lesson_feedback import admin_feedback_lessons_keyboard
 from app.bot.keyboards.reply import (
     ADMIN_MATERIALS_BUTTONS,
     ADMIN_MENU_BUTTONS,
+    admin_program_season_keyboard,
     all_reply_button_labels,
     main_menu_keyboard,
     materials_program_keyboard,
@@ -87,6 +89,21 @@ class AdminUxTests(unittest.TestCase):
         self.assertIn("Загрузить комплект занятия", labels)
         self.assertIn("Чеклист занятия", labels)
         self.assertNotIn("Добавить материал", labels)
+
+    def test_bundle_and_checklist_offer_both_seasons(self) -> None:
+        labels = [button.text for row in admin_program_season_keyboard().keyboard for button in row]
+        self.assertIn("Сезон 1. Бизнес", labels)
+        self.assertIn("Сезон 2. Люди", labels)
+        self.assertTrue({"Сезон 1. Бизнес", "Сезон 2. Люди"}.issubset(all_reply_button_labels()))
+
+    def test_bundle_flow_is_not_hardcoded_to_first_season(self) -> None:
+        source = Path("app/bot/handlers/main.py").read_text(encoding="utf-8")
+        bundle_section = source[
+            source.index('F.text == "Загрузить комплект занятия"') : source.index('F.text == "Сервисные действия"')
+        ]
+        self.assertIn("bundle_season_key", bundle_section)
+        self.assertIn("checklist_season_key", bundle_section)
+        self.assertNotIn('admin_blocks_keyboard("s1")', bundle_section)
 
     def test_final_lesson_date_is_august_25(self) -> None:
         final_lesson = next(item for item in DEFAULT_PROGRAM_LESSONS if item["lesson_key"] == "s1_b5_final")

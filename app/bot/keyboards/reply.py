@@ -128,6 +128,12 @@ ADMIN_MATERIAL_SEASON_BUTTONS = [
     [KeyboardButton(text="Админ: меню")],
 ]
 
+ADMIN_PROGRAM_SEASON_BUTTONS = [
+    [KeyboardButton(text="Сезон 1. Бизнес")],
+    [KeyboardButton(text="Сезон 2. Люди")],
+    [KeyboardButton(text="Админ: меню")],
+]
+
 ADMIN_MEDIA_SEASON_BUTTONS = [
     [KeyboardButton(text="Медиа: Сезон 1. Бизнес-консалтинг")],
     [KeyboardButton(text="Медиа: Сезон 2. Люди")],
@@ -281,6 +287,7 @@ def all_reply_button_labels() -> set[str]:
         ADMIN_CALENDAR_BUTTONS,
         ADMIN_TECH_FILES_BUTTONS,
         ADMIN_TEXTS_BUTTONS,
+        ADMIN_PROGRAM_SEASON_BUTTONS,
         ADMIN_MATERIAL_SEASON_BUTTONS,
         ADMIN_MEDIA_SEASON_BUTTONS,
         ADMIN_MATERIAL_MODULE_BUTTONS,
@@ -305,6 +312,10 @@ def admin_texts_keyboard() -> ReplyKeyboardMarkup:
 
 def admin_material_season_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=ADMIN_MATERIAL_SEASON_BUTTONS, resize_keyboard=True)
+
+
+def admin_program_season_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=ADMIN_PROGRAM_SEASON_BUTTONS, resize_keyboard=True)
 
 
 def admin_media_season_keyboard() -> ReplyKeyboardMarkup:

@@ -251,3 +251,88 @@ def test_followup_inherits_speaker_from_pending_context() -> None:
     assert plan.lesson_key == "s1_b3_l4"
     assert plan.speaker_hint == "Семенов"
     assert "pending_question=Приведи цитаты Семенова" in fake.user_prompt
+
+
+def test_explicit_date_repairs_unnecessary_clarification() -> None:
+    lessons = [lesson("s1_b3_l4", 14, "Защита проектов", "Александр Семенов")]
+    fake = FakeLLM(
+        {
+            "action": "clarify",
+            "lesson_key": None,
+            "clarification": "Какое занятие?",
+            "confidence": 0.8,
+        }
+    )
+    plan = asyncio.run(build_semantic_plan(llm_client=fake, question="хочу все по 14 июля", lessons=lessons))
+    assert plan.action == "lesson_card"
+    assert plan.lesson_key == "s1_b3_l4"
+
+
+def test_speaker_and_lesson_number_repair_unnecessary_clarification() -> None:
+    lessons = [
+        lesson("s1_b4_l3", 4, "Отчёты и показатели", "Ю. Макарова"),
+        lesson("s1_b4_l4", 11, "Групповая работа", "Ю. Макарова, С. Сафронов"),
+    ]
+    lessons[0].lesson_number = 3
+    fake = FakeLLM(
+        {
+            "action": "clarify",
+            "lesson_key": None,
+            "speaker_hint": "Макарова",
+            "clarification": "Какое занятие?",
+            "confidence": 0.8,
+        }
+    )
+    plan = asyncio.run(
+        build_semantic_plan(
+            llm_client=fake,
+            question="чо там Макарова рассказывала на третьем занятии",
+            lessons=lessons,
+        )
+    )
+    assert plan.action == "rag_answer"
+    assert plan.lesson_key == "s1_b4_l3"
+
+
+def test_colloquial_content_names_override_model_misclassification() -> None:
+    lessons = [lesson("s1_b4_l4", 11, "Групповая работа", "Ю. Макарова, С. Сафронов")]
+    fake = FakeLLM(
+        {
+            "action": "content_delivery",
+            "lesson_key": "s1_b4_l4",
+            "content_types": ["materials", "summary"],
+            "confidence": 0.9,
+        }
+    )
+    plan = asyncio.run(
+        build_semantic_plan(
+            llm_client=fake,
+            question="тока запись и выжимку с 11.08",
+            lessons=lessons,
+        )
+    )
+    assert plan.action == "content_delivery"
+    assert plan.content_types == ("video", "summary")
+
+
+def test_block_reference_does_not_mistake_kickoff_for_numbered_lesson() -> None:
+    kickoff = lesson("s1_b1_kickoff", 1, "Кикоф программы", "")
+    kickoff.lesson_number = None
+    kickoff.block_title = "Кикоф программы и блока"
+    fake = FakeLLM(
+        {
+            "action": "content_delivery",
+            "lesson_key": "s1_b1_kickoff",
+            "content_types": ["video"],
+            "confidence": 0.9,
+        }
+    )
+    plan = asyncio.run(
+        build_semantic_plan(
+            llm_client=fake,
+            question="запись последнего занятия первого блока",
+            lessons=[kickoff],
+        )
+    )
+    assert plan.action == "clarify"
+    assert plan.lesson_key is None

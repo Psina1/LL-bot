@@ -17,10 +17,12 @@ class UserFlow(StatesGroup):
 
 
 class AdminFlow(StatesGroup):
+    waiting_for_bundle_season = State()
     waiting_for_bundle_block = State()
     waiting_for_bundle_lesson = State()
     waiting_for_bundle_file = State()
     waiting_for_bundle_confirm = State()
+    waiting_for_checklist_season = State()
     waiting_for_checklist_block = State()
     waiting_for_checklist_lesson = State()
     waiting_for_material_season = State()

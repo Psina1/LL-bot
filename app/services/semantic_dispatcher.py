@@ -166,7 +166,13 @@ async def build_semantic_plan(
     remembered_speaker = _optional_string(context.get("conversation_speaker_hint"))
     if plan.speaker_hint is None and remembered_speaker and plan.action not in {"fallback", "schedule_answer"}:
         plan = replace(plan, speaker_hint=remembered_speaker)
-    return _validate_speaker_lesson(
+    plan = _validate_speaker_lesson(
+        plan,
+        question=question,
+        lessons=lessons,
+        remembered_lesson_key=_optional_string(context.get("conversation_lesson_key")),
+    )
+    return _repair_explicit_user_references(
         plan,
         question=question,
         lessons=lessons,
@@ -310,3 +316,144 @@ def _question_matches_lesson_title(question: str, lesson_title: str) -> bool:
         if token not in ignored
     }
     return len(title_tokens.intersection(re.findall(r"[a-zа-я-]{5,}", question))) >= 2
+
+
+def _repair_explicit_user_references(
+    plan: SemanticPlan,
+    *,
+    question: str,
+    lessons: Iterable[Any],
+    remembered_lesson_key: str | None,
+) -> SemanticPlan:
+    """Keep obvious dates, lesson numbers and colloquial file names out of LLM variance."""
+    lesson_list = list(lessons)
+    normalized = question.casefold().replace("ё", "е")
+    lesson_key = plan.lesson_key
+
+    dated_match = _lesson_from_explicit_date(normalized, lesson_list)
+    if dated_match is not None:
+        lesson_key = dated_match.lesson_key
+
+    if plan.speaker_hint:
+        lesson_number_match = re.search(r"\b(\d+)\s*(?:-?(?:е|м|го|ое|ом))?\s*(?:занят\w*|урок\w*)", normalized)
+        if lesson_number_match is None:
+            lesson_number_match = re.search(r"(?:занят\w*|урок\w*)\s*(?:№|номер)?\s*(\d+)", normalized)
+        requested_number = int(lesson_number_match.group(1)) if lesson_number_match else None
+        if requested_number is None and any(stem in normalized for stem in ("занят", "урок")):
+            ordinal_numbers = {"перв": 1, "втор": 2, "трет": 3, "четвер": 4}
+            requested_number = next((number for stem, number in ordinal_numbers.items() if stem in normalized), None)
+        if requested_number is not None:
+            candidates = [
+                item
+                for item in lesson_list
+                if item.lesson_number == requested_number and _speaker_matches(plan.speaker_hint, item.speaker)
+            ]
+            if len(candidates) == 1:
+                lesson_key = candidates[0].lesson_key
+
+    requested_types = _content_types_from_question(normalized)
+    effective_key = lesson_key or remembered_lesson_key
+    selected_lesson = next((item for item in lesson_list if item.lesson_key == effective_key), None)
+    if (
+        selected_lesson is not None
+        and selected_lesson.lesson_number is None
+        and re.search(r"занят\w*.*\b(?:перв|втор|трет|четвер)\w*\s+блок", normalized)
+    ):
+        return replace(
+            plan,
+            action="clarify",
+            lesson_key=None,
+            content_type=None,
+            content_types=(),
+            include_card=False,
+            clarification="Уточни название блока или тему занятия, чтобы я не перепутал его с кикофом.",
+            confidence=max(plan.confidence, 0.9),
+        )
+    if requested_types and effective_key:
+        return replace(
+            plan,
+            action="content_delivery",
+            lesson_key=effective_key,
+            content_type=requested_types[0],
+            content_types=requested_types,
+            include_card=False,
+            clarification=None,
+            confidence=max(plan.confidence, 0.9),
+        )
+
+    if dated_match is not None and any(marker in normalized for marker in ("все по", "все про", "карточ", "что доступно")):
+        return replace(
+            plan,
+            action="lesson_card",
+            lesson_key=dated_match.lesson_key,
+            include_card=False,
+            clarification=None,
+            confidence=max(plan.confidence, 0.9),
+        )
+
+    if lesson_key and plan.action == "clarify" and plan.speaker_hint:
+        return replace(
+            plan,
+            action="rag_answer",
+            lesson_key=lesson_key,
+            include_card=True,
+            clarification=None,
+            confidence=max(plan.confidence, 0.9),
+        )
+    if lesson_key != plan.lesson_key:
+        return replace(plan, lesson_key=lesson_key)
+    return plan
+
+
+def _lesson_from_explicit_date(question: str, lessons: list[Any]) -> Any | None:
+    numeric = re.search(r"\b(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\b", question)
+    day: int | None = None
+    month: int | None = None
+    year: int | None = None
+    if numeric:
+        day, month = int(numeric.group(1)), int(numeric.group(2))
+        if numeric.group(3):
+            year = int(numeric.group(3))
+            year += 2000 if year < 100 else 0
+    else:
+        months = {
+            "январ": 1,
+            "феврал": 2,
+            "март": 3,
+            "апрел": 4,
+            "мая": 5,
+            "май": 5,
+            "июн": 6,
+            "июл": 7,
+            "август": 8,
+            "сентябр": 9,
+            "октябр": 10,
+            "ноябр": 11,
+            "декабр": 12,
+        }
+        word_date = re.search(r"\b(\d{1,2})\s+([а-я]+)", question)
+        if word_date:
+            day = int(word_date.group(1))
+            month = next((value for stem, value in months.items() if word_date.group(2).startswith(stem)), None)
+    if day is None or month is None:
+        return None
+    matches = [
+        item
+        for item in lessons
+        if item.date_start
+        and item.date_start.day == day
+        and item.date_start.month == month
+        and (year is None or item.date_start.year == year)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _content_types_from_question(question: str) -> tuple[str, ...]:
+    marker_groups = (
+        ("video", ("видео", "видос", "запись")),
+        ("summary", ("саммари", "выжимк", "конспект", "краткое содержание")),
+        ("homework", ("домаш", "дз")),
+        ("podcast", ("подкаст", "аудио")),
+        ("materials", ("материал", "презентац", "презентах", "файл")),
+    )
+    return tuple(kind for kind, markers in marker_groups if any(marker in question for marker in markers))

@@ -35,6 +35,7 @@ from app.bot.keyboards.reply import (
     admin_bundle_preview_keyboard,
     admin_checklist_keyboard,
     admin_material_module_keyboard,
+    admin_program_season_keyboard,
     admin_material_season_keyboard,
     admin_material_type_keyboard,
     admin_materials_keyboard,
@@ -3374,12 +3375,44 @@ def build_main_router(container: AppContainer) -> Router:
         if not await require_admin(message):
             return
         await state.clear()
-        await state.set_state(AdminFlow.waiting_for_bundle_block)
+        await state.set_state(AdminFlow.waiting_for_bundle_season)
         await message.answer(
-            "Выбери блок один раз. После этого можно будет прислать все файлы занятия по очереди.",
-            reply_markup=await admin_blocks_keyboard("s1"),
+            "Выбери сезон. Затем один раз выберем блок и занятие, после чего можно будет прислать все файлы по очереди.",
+            reply_markup=admin_program_season_keyboard(),
             parse_mode=None,
         )
+
+    @router.message(AdminFlow.waiting_for_bundle_season, F.text)
+    async def admin_bundle_season_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        if message.text == "Админ: меню":
+            await state.clear()
+            await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
+            return
+        season_by_label = {
+            "Сезон 1. Бизнес": ("s1", "Бизнес"),
+            "Сезон 2. Люди": ("s2", "Люди"),
+        }
+        season = season_by_label.get(message.text)
+        if season is None:
+            await message.answer("Выбери сезон кнопкой ниже.", reply_markup=admin_program_season_keyboard())
+            return
+        season_key, season_title = season
+        async with SessionLocal() as session:
+            blocks = await ProgramLessonRepository.list_blocks(session, season_key)
+        if not blocks:
+            await message.answer(
+                f"В сезоне «{season_title}» пока нет занятий в расписании. "
+                "Сначала добавь реальные блоки и занятия, после этого комплект можно будет привязать без ручных ключей.",
+                reply_markup=admin_materials_keyboard(),
+            )
+            await state.clear()
+            return
+        await state.update_data(bundle_season_key=season_key, bundle_season_title=season_title)
+        await state.set_state(AdminFlow.waiting_for_bundle_block)
+        await message.answer("Выбери блок один раз.", reply_markup=await admin_blocks_keyboard(season_key))
 
     @router.message(AdminFlow.waiting_for_bundle_block, F.text)
     async def admin_bundle_block_handler(message: Message, state: FSMContext) -> None:
@@ -3390,12 +3423,18 @@ def build_main_router(container: AppContainer) -> Router:
             await state.clear()
             await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
             return
+        data = await state.get_data()
+        season_key = data.get("bundle_season_key")
+        if not season_key:
+            await state.clear()
+            await message.answer("Потерял выбранный сезон. Начни загрузку заново.", reply_markup=admin_materials_keyboard())
+            return
         async with SessionLocal() as session:
-            blocks = await ProgramLessonRepository.list_blocks(session, "s1")
+            blocks = await ProgramLessonRepository.list_blocks(session, season_key)
         block_by_label = {block_button_label(block): block for block in blocks}
         block = block_by_label.get(message.text)
         if block is None:
-            await message.answer("Выбери блок кнопкой ниже.", reply_markup=await admin_blocks_keyboard("s1"))
+            await message.answer("Выбери блок кнопкой ниже.", reply_markup=await admin_blocks_keyboard(season_key))
             return
         block_key, block_title, _ = block
         await state.update_data(bundle_block_key=block_key, bundle_block_title=block_title)
@@ -3444,19 +3483,56 @@ def build_main_router(container: AppContainer) -> Router:
         if not await require_admin(message):
             return
         await state.clear()
+        await state.set_state(AdminFlow.waiting_for_checklist_season)
+        await message.answer("Выбери сезон.", reply_markup=admin_program_season_keyboard())
+
+    @router.message(AdminFlow.waiting_for_checklist_season, F.text)
+    async def admin_checklist_season_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            await state.clear()
+            return
+        if message.text == "Админ: меню":
+            await state.clear()
+            await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
+            return
+        season_by_label = {"Сезон 1. Бизнес": "s1", "Сезон 2. Люди": "s2"}
+        season_key = season_by_label.get(message.text)
+        if season_key is None:
+            await message.answer("Выбери сезон кнопкой ниже.", reply_markup=admin_program_season_keyboard())
+            return
+        async with SessionLocal() as session:
+            blocks = await ProgramLessonRepository.list_blocks(session, season_key)
+        if not blocks:
+            await message.answer(
+                "В этом сезоне пока нет занятий в расписании, поэтому чеклист ещё не к чему привязать.",
+                reply_markup=admin_materials_keyboard(),
+            )
+            await state.clear()
+            return
+        await state.update_data(checklist_season_key=season_key)
         await state.set_state(AdminFlow.waiting_for_checklist_block)
-        await message.answer("Выбери блок.", reply_markup=await admin_blocks_keyboard("s1"))
+        await message.answer("Выбери блок.", reply_markup=await admin_blocks_keyboard(season_key))
 
     @router.message(AdminFlow.waiting_for_checklist_block, F.text)
     async def admin_checklist_block_handler(message: Message, state: FSMContext) -> None:
         if not await require_admin(message):
             await state.clear()
             return
+        if message.text == "Админ: меню":
+            await state.clear()
+            await message.answer(ADMIN_PROMPT, reply_markup=admin_menu_keyboard())
+            return
+        data = await state.get_data()
+        season_key = data.get("checklist_season_key")
+        if not season_key:
+            await state.clear()
+            await message.answer("Потерял выбранный сезон. Начни заново.", reply_markup=admin_materials_keyboard())
+            return
         async with SessionLocal() as session:
-            blocks = await ProgramLessonRepository.list_blocks(session, "s1")
+            blocks = await ProgramLessonRepository.list_blocks(session, season_key)
         block = {block_button_label(item): item for item in blocks}.get(message.text)
         if block is None:
-            await message.answer("Выбери блок кнопкой ниже.", reply_markup=await admin_blocks_keyboard("s1"))
+            await message.answer("Выбери блок кнопкой ниже.", reply_markup=await admin_blocks_keyboard(season_key))
             return
         await state.update_data(checklist_block_key=block[0])
         await state.set_state(AdminFlow.waiting_for_checklist_lesson)
@@ -4314,7 +4390,10 @@ def build_main_router(container: AppContainer) -> Router:
             reply_markup=admin_material_season_keyboard(),
         )
 
-    @router.message(AdminFlow.waiting_for_material_season, F.text.in_(["Материал: Сезон 1. Бизнес-консалтинг", "Материал: без сезона"]))
+    @router.message(
+        AdminFlow.waiting_for_material_season,
+        F.text.in_(["Материал: Сезон 1. Бизнес-консалтинг", "Материал: Сезон 2. Люди", "Материал: без сезона"]),
+    )
     async def admin_material_season_handler(message: Message, state: FSMContext) -> None:
         if not await require_admin(message):
             await state.clear()
@@ -4329,11 +4408,24 @@ def build_main_router(container: AppContainer) -> Router:
             )
             return
 
-        await state.update_data(material_season_key="s1", material_season_title="Бизнес")
+        season_key, season_title = (
+            ("s2", "Люди") if message.text == "Материал: Сезон 2. Люди" else ("s1", "Бизнес")
+        )
+        await state.update_data(material_season_key=season_key, material_season_title=season_title)
+        async with SessionLocal() as session:
+            blocks = await ProgramLessonRepository.list_blocks(session, season_key)
+        if not blocks:
+            await state.set_state(AdminFlow.waiting_for_material_module)
+            await message.answer(
+                f"В сезоне «{season_title}» пока нет расписания. Можно добавить общий материал сезона "
+                "или временно привязать материал к номеру урока/модуля.",
+                reply_markup=admin_material_module_keyboard(),
+            )
+            return
         await state.set_state(AdminFlow.waiting_for_material_block)
         await message.answer(
             "Шаг 2: выбери блок программы.",
-            reply_markup=await admin_blocks_keyboard("s1"),
+            reply_markup=await admin_blocks_keyboard(season_key),
         )
 
     @router.message(AdminFlow.waiting_for_material_block, F.text)
