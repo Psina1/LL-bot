@@ -69,7 +69,7 @@ ADMIN_STATUS_BUTTONS = [
 ]
 
 ADMIN_MATERIALS_BUTTONS = [
-    [KeyboardButton(text="Загрузить комплект занятия")],
+    [KeyboardButton(text="Материалы: сезон 1"), KeyboardButton(text="Материалы: сезон 2")],
     [KeyboardButton(text="Чеклист занятия"), KeyboardButton(text="Библиотека материалов")],
     [KeyboardButton(text="Домашние задания в базе"), KeyboardButton(text="Сервисные действия")],
     [KeyboardButton(text="Админ: меню")],
@@ -84,6 +84,7 @@ ADMIN_BUNDLE_BUTTONS = [
 # клавиатуре Telegram. Регистрируем их как навигацию до следующего обновления чата.
 LEGACY_HIDDEN_ADMIN_BUTTONS = [
     [KeyboardButton(text="Добавить материал"), KeyboardButton(text="Добавить видео/подкаст")],
+    [KeyboardButton(text="Загрузить комплект занятия")],
 ]
 
 ADMIN_MATERIALS_SERVICE_BUTTONS = [

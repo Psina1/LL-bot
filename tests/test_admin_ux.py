@@ -86,7 +86,8 @@ class AdminUxTests(unittest.TestCase):
 
     def test_admin_materials_menu_uses_bundle_flow(self) -> None:
         labels = [button.text for row in ADMIN_MATERIALS_BUTTONS for button in row]
-        self.assertIn("Загрузить комплект занятия", labels)
+        self.assertIn("Материалы: сезон 1", labels)
+        self.assertIn("Материалы: сезон 2", labels)
         self.assertIn("Чеклист занятия", labels)
         self.assertNotIn("Добавить материал", labels)
 
@@ -109,6 +110,14 @@ class AdminUxTests(unittest.TestCase):
         final_lesson = next(item for item in DEFAULT_PROGRAM_LESSONS if item["lesson_key"] == "s1_b5_final")
         self.assertEqual(final_lesson["date_start"], date(2026, 8, 25))
         self.assertIsNone(final_lesson["date_end"])
+
+    def test_people_season_has_real_first_lesson_and_tentative_slots(self) -> None:
+        people_lessons = [item for item in DEFAULT_PROGRAM_LESSONS if item["season_key"] == "s2"]
+        self.assertEqual(len(people_lessons), 7)
+        self.assertEqual(people_lessons[0]["date_start"], date(2026, 9, 29))
+        self.assertEqual(people_lessons[0]["speaker"], "Денис Карандашев")
+        self.assertTrue(all(item["date_start"] is None for item in people_lessons[1:]))
+        self.assertTrue(all("ориентировочно" in item["date_text"] for item in people_lessons[1:]))
 
     def test_feedback_numbers_follow_full_program_order(self) -> None:
         numbers = build_lesson_display_numbers(self.lessons)

@@ -3382,6 +3382,32 @@ def build_main_router(container: AppContainer) -> Router:
             parse_mode=None,
         )
 
+    @router.message(F.text.in_(["Материалы: сезон 1", "Материалы: сезон 2"]))
+    async def admin_bundle_season_shortcut_handler(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            return
+        season_by_label = {
+            "Материалы: сезон 1": ("s1", "Бизнес"),
+            "Материалы: сезон 2": ("s2", "Люди"),
+        }
+        season_key, season_title = season_by_label[message.text]
+        await state.clear()
+        async with SessionLocal() as session:
+            blocks = await ProgramLessonRepository.list_blocks(session, season_key)
+        if not blocks:
+            await message.answer(
+                f"В сезоне «{season_title}» пока нет занятий для привязки материалов.",
+                reply_markup=admin_materials_keyboard(),
+            )
+            return
+        await state.update_data(bundle_season_key=season_key, bundle_season_title=season_title)
+        await state.set_state(AdminFlow.waiting_for_bundle_block)
+        await message.answer(
+            f"Сезон «{season_title}». Выбери блок, затем занятие и присылай файлы по очереди.",
+            reply_markup=await admin_blocks_keyboard(season_key),
+            parse_mode=None,
+        )
+
     @router.message(AdminFlow.waiting_for_bundle_season, F.text)
     async def admin_bundle_season_handler(message: Message, state: FSMContext) -> None:
         if not await require_admin(message):
@@ -5672,6 +5698,12 @@ def build_main_router(container: AppContainer) -> Router:
                 parse_mode=None,
                 link_preview_options=NO_LINK_PREVIEW,
             )
+        schedule_text, seasons = await build_schedule_text_and_seasons()
+        await message.answer(
+            schedule_text,
+            reply_markup=schedule_seasons_keyboard(seasons),
+            parse_mode=None,
+        )
         await send_schedule_image(message)
 
     @router.callback_query(F.data.startswith("schedule:season:"))
