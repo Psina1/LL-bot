@@ -111,13 +111,15 @@ class AdminUxTests(unittest.TestCase):
         self.assertEqual(final_lesson["date_start"], date(2026, 8, 25))
         self.assertIsNone(final_lesson["date_end"])
 
-    def test_people_season_has_real_first_lesson_and_tentative_slots(self) -> None:
+    def test_people_season_has_two_real_lessons_and_tentative_slots(self) -> None:
         people_lessons = [item for item in DEFAULT_PROGRAM_LESSONS if item["season_key"] == "s2"]
         self.assertEqual(len(people_lessons), 7)
         self.assertEqual(people_lessons[0]["date_start"], date(2026, 9, 29))
         self.assertEqual(people_lessons[0]["speaker"], "Денис Карандашев")
-        self.assertTrue(all(item["date_start"] is None for item in people_lessons[1:]))
-        self.assertTrue(all("ориентировочно" in item["date_text"] for item in people_lessons[1:]))
+        self.assertEqual(people_lessons[1]["date_start"], date(2026, 10, 13))
+        self.assertIn("Управление результатом", people_lessons[1]["lesson_title"])
+        self.assertTrue(all(item["date_start"] is None for item in people_lessons[2:]))
+        self.assertTrue(all("ориентировочно" in item["date_text"] for item in people_lessons[2:]))
 
     def test_feedback_numbers_follow_full_program_order(self) -> None:
         numbers = build_lesson_display_numbers(self.lessons)
