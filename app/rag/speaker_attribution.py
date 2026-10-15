@@ -13,14 +13,15 @@ UNKNOWN_SPEAKER_LABELS = (
     "unknown speaker",
 )
 TECHNICAL_SPEAKER_RE = re.compile(r"\bSPEAKER[_\s-]?\d{1,3}\b", re.IGNORECASE)
-TIMESTAMP_PREFIX = r"(?:\[\d{1,2}:\d{2}(?::\d{2})?\][ \t]*)?"
+TIMESTAMP_VALUE = r"\d{1,2}:\d{2}(?::\d{2})?"
+TIMESTAMP_PREFIX = rf"(?:(?:\[{TIMESTAMP_VALUE}\]|{TIMESTAMP_VALUE})[ \t]*(?:[—-][ \t]*)?)?"
 GENERIC_COLON_SPEAKER = (
     rf"^[ \t]*{TIMESTAMP_PREFIX}"
     r"(?!(?:Встреча|Дата|Участники|Транскрипция):)"
     r"[A-ZА-ЯЁ][A-Za-zА-ЯЁа-яё0-9 ._()'\-]{1,79}:[ \t]*"
 )
 GENERIC_TIMESTAMP_SPEAKER = (
-    r"^[ \t]*\[\d{1,2}:\d{2}(?::\d{2})?\][ \t]*"
+    rf"^[ \t]*(?:\[{TIMESTAMP_VALUE}\]|{TIMESTAMP_VALUE})[ \t]*(?:[—-][ \t]*)?"
     r"[A-ZА-ЯЁ][A-Za-zА-ЯЁа-яё'\-]+[ \t]+"
     r"[A-ZА-ЯЁ][A-Za-zА-ЯЁа-яё'\-]+[ \t]+"
 )

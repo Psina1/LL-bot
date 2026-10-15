@@ -200,6 +200,17 @@ class SpeakerAttributionTests(unittest.TestCase):
         self.assertEqual(chunks[1].speaker_name, "Рахманов А.")
         self.assertEqual(chunks[1].speaker_status, "confirmed")
 
+    def test_unbracketed_timestamp_and_dash_classify_reversed_known_name(self) -> None:
+        chunks = split_transcript_by_speaker(
+            "0:04 — Цирулева Дарья\nОткрывает встречу.\n"
+            "1:17 — Кульбякина Татьяна\nОбъясняет модель управления результатом.",
+            ["Татьяна Кульбякина"],
+        )
+        self.assertIsNone(chunks[0].speaker_name)
+        self.assertIn(chunks[0].speaker_status, {"unknown", "unattributed"})
+        self.assertEqual(chunks[1].speaker_name, "Татьяна Кульбякина")
+        self.assertEqual(chunks[1].speaker_status, "confirmed")
+
     def test_neutralizes_unconfirmed_author_role(self) -> None:
         self.assertEqual(
             neutralize_anonymous_authors("Участники согласились проверить гипотезу."),
